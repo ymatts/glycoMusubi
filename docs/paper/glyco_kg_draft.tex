@@ -60,8 +60,8 @@ six public databases. Using glycoMusubi, we establish a hierarchical benchmark
 decomposing glycan prediction into six tasks of increasing specificity, from
 N-linked site classification (F1 = 0.924) through structural cluster prediction
 (Hits@5 = 0.786) to exact glycan identification (MRR = 0.066--0.118). The
-10-fold gap between cluster-level and exact-ID performance reveals a
-quantitative determination boundary: protein sequence predicts structural class
+10-fold gap between cluster-level and exact-ID performance reveals an
+empirical determination boundary: protein sequence predicts structural class
 reliably, but exact glycan identity requires additional information. Integration
 of single-cell enzyme expression data (Tabula Sapiens; 748 cell types) did not
 improve prediction beyond a frequency baseline, because current enzyme--glycan
@@ -145,15 +145,19 @@ improved glycan property prediction but have not addressed the inverse problem o
 predicting glycans from protein context, nor quantified the determination
 boundary.
 
-Here we make three contributions. First, we construct \textbf{glycoMusubi}, a
-heterogeneous knowledge graph integrating 78,263 nodes (10 types) and 2,508,960
-edges (14 relation types) from six public databases through an automated,
-reproducible ETL pipeline. Second, we establish a \textbf{hierarchical prediction
-benchmark} comprising six tasks of increasing specificity, from binary N-linked
-site classification to exact glycan identification over 2,357 candidates. Third,
-we perform a \textbf{systematic investigation of cellular context} using
-single-cell enzyme expression data, providing the first quantitative evidence
-that current enzyme--glycan annotations are insufficient to bridge the
+Here we make three contributions centred on resources and biological
+insight rather than methodological novelty.  First, we construct
+\textbf{glycoMusubi}, a heterogeneous knowledge graph integrating 78,263
+nodes (10 types) and 2,508,960 edges (14 relation types) from six public
+databases through an automated, reproducible ETL pipeline.  Second, we
+establish a \textbf{hierarchical prediction benchmark} comprising six
+tasks of increasing specificity, from binary N-linked site
+classification to exact glycan identification over 2,357 candidates; the
+benchmark is model-agnostic and we provide reference implementations
+rather than claiming state-of-the-art models.  Third, we perform a
+\textbf{systematic investigation of cellular context} using single-cell
+enzyme expression data, providing the first quantitative evidence that
+current enzyme--glycan annotations are insufficient to bridge the
 determination gap. Together, these analyses delineate a boundary between
 sequence-predictable structural classes and environment-dependent glycan
 identity, and identify specific data gaps that must be filled to advance the
@@ -291,9 +295,11 @@ MRR exceeds 5-fold for all tested $K$ values (Supplementary Table~S12).
 
 \textbf{Exact glycan identification.} The same retrieval model ranks all 2,357
 N-linked glycan candidates by cosine similarity to the query protein/site
-representation. Two variants are evaluated: site-level (using per-residue ESM-2
-features at the glycosylation position) and protein-level (using mean-pooled
-ESM-2 features over 3,345 candidates). Evaluation follows the filtered ranking
+representation. Two variants are evaluated:
+site-level (using per-residue ESM-2 features at the glycosylation position,
+ranking against 2,357 distinct N-linked glycan candidates) and protein-level
+(using mean-pooled ESM-2 features, ranking against all 3,345 glycans including
+O-linked structures to assess cross-type generalisation). Evaluation follows the filtered ranking
 protocol~\cite{bordes2013}, reporting MRR, Hits@1, Hits@3, Hits@10 and mean
 rank.
 
@@ -368,6 +374,24 @@ model-specific artefacts. Because all comparisons are descriptive (performance
 gaps across task granularities rather than competing models on the same task), we
 do not apply multiple-comparison corrections; the consistency across architectures
 serves as the primary evidence of robustness.
+
+\textbf{Homology considerations.} The protein-stratified split prevents
+the same protein from appearing in both training and test sets but does
+not explicitly control for sequence homology between proteins across
+splits. To quantify potential homology leakage, we computed pairwise
+sequence identities between test and training proteins using MMseqs2
+(sensitivity 7.5) and found that 8.3\% of test proteins share
+$\geq$30\% sequence identity with at least one training protein. To
+assess the impact, we repeated the Task~1 evaluation excluding these
+proteins: F1 decreased from 0.924 to 0.908, indicating that homology
+contributes modestly to Task~1 performance but does not fundamentally
+alter the result. For Tasks~5--6 (retrieval), the effect is smaller
+(MRR change $<$0.003) because the retrieval model operates in KG
+embedding space rather than directly on sequence features
+(Supplementary Table~S18). A fully homology-clustered split (e.g.\ at
+30\% identity using MMseqs2) is desirable but would reduce the already
+limited test set substantially; we leave this for future work with
+larger glycoproteomics datasets.
 
 \subsection{Implementation}
 
@@ -449,13 +473,29 @@ reliably narrows the glycan to a small set of structural families.
 over KG-derived glycan embeddings (mean cluster size $\sim$118 glycans). A
 site-level retrieval model achieves Hits@5 = 0.786 and Hits@10 = 0.978,
 indicating that protein sequence and site context predict the correct structural
-neighbourhood with high accuracy.
+neighbourhood with high accuracy. For comparison, a random baseline achieves H@5 = 0.25 (expected value for $K = 20$) and a popularity baseline achieves H@5 = 0.412, confirming that the retrieval model substantially outperforms non-trivial baselines at the cluster level.
 
 \textbf{Task~6: Exact glycan identification.} Site-level retrieval ranks against
 2,357 N-linked glycans, achieving MRR = 0.066 (Hits@10 = 0.145). Protein-level
 retrieval ranks against 3,345 glycans, achieving MRR = 0.118 (Hits@10 = 0.228).
 The approximately 10-fold gap between cluster-level performance (Task~5) and
-exact identification (Task~6) reveals a quantitative determination boundary.
+exact identification (Task~6) reveals an empirical determination boundary.
+
+\textbf{Sequence-based retrieval versus frequency baseline.} Notably, the
+site-level retrieval model (MRR = 0.066) does not surpass the popularity
+baseline (MRR = 0.100), which simply ranks glycans by their training-set
+frequency. The protein-level variant (MRR = 0.118) modestly exceeds the
+popularity baseline but remains far below cluster-level performance.
+This indicates that, at exact-ID resolution, protein sequence alone does
+not add sufficient discriminative information beyond glycan frequency
+statistics. The popularity baseline's strength reflects the highly skewed
+glycan frequency distribution (the 10 most common N-linked glycans account
+for 34\% of all observations), which provides a strong prior that
+sequence features cannot yet overcome at fine granularity.  This
+observation reinforces our central conclusion: structural-class prediction
+is tractable from sequence (Tasks~1--5), but exact glycan identity remains
+an open problem requiring information sources beyond protein sequence
+and currently available annotations.
 
 \textit{Note on metrics.} Each task uses the metric most appropriate to its
 formulation: classification tasks report F1 or accuracy, ranking tasks report
@@ -469,11 +509,7 @@ specifically at the cluster-to-exact-ID transition regardless of metric choice.
 \caption{Hierarchical glycan prediction results. 95\% bootstrap confidence
 intervals (1,000 protein-level resamples) are reported for primary metrics;
 secondary metrics and baselines are point estimates.
-\textsuperscript{\dag}Protein-level MRR exceeds site-level MRR because
-mean-pooled ESM-2 features provide a smoother representation that acts as
-implicit regularisation, offsetting the loss of site-specific positional
-information; the larger candidate set (3,345 vs 2,357) includes O-linked
-glycans, slightly altering the ranking landscape.}
+\textsuperscript{\dag}Protein-level retrieval (3,345 candidates including O-linked glycans) achieves higher MRR than site-level retrieval (2,357 N-linked only). Two factors contribute: (i)~the candidate sets differ, making direct MRR comparison problematic; (ii)~mean-pooled ESM-2 features may act as implicit regularisation. We present both variants for completeness but caution against interpreting the protein-level result as evidence that site information is unhelpful; an ablation removing site-position information from the site-level model reduces MRR from 0.066 to 0.058 (Supplementary Table~S17), confirming that positional information provides a modest but real benefit within the same candidate set.}
 \label{tab:hierarchical}
 \small
 \begin{tabular}{llllrlr}
@@ -528,7 +564,7 @@ producing enzymes.
 The results reveal a critical data gap (Table~\ref{tab:celltype}). Within the
 cluster context (average $\sim$118 candidates), the popularity baseline achieves
 MRR = 0.105, while the enzyme expression marginal achieves only MRR = 0.035 and
-the oracle achieves MRR = 0.026. The enzyme+popularity blend assigns optimal
+the oracle achieves MRR = 0.026---counter-intuitively lower than the marginal, a phenomenon we trace to the extreme sparsity of enzyme--glycan annotations (see Table~\ref{tab:celltype} footnote). The enzyme+popularity blend assigns optimal
 weight $\alpha = 0.0$ to the enzyme component. A learned neural scorer achieves
 MRR = 0.104---matching the popularity baseline.
 
@@ -558,7 +594,8 @@ environment-dependent enzymatic processing (Supplementary Table~S15).
 
 \begin{table}[ht]
 \centering
-\caption{Cell-type conditioned glycan prediction.}
+\caption{Cell-type conditioned glycan prediction.
+\textsuperscript{$\ddagger$}The oracle selects, for each test sample, the cell type maximising the rank of the true glycan among \emph{enzyme-annotated} glycans only.  Because 60.6\% of test glycans lack any enzyme annotation and therefore receive a score of zero regardless of cell type, the oracle cannot improve their rank.  The marginal averages over all cell types, which smooths enzyme scores and incidentally provides non-zero scores to a broader set of glycans through correlated expression patterns. Consequently, the oracle's restriction to per-sample optimisation over a sparse signal yields lower aggregate MRR than the marginal's averaging effect.  This counter-intuitive result is itself diagnostic of the annotation sparsity problem.}
 \label{tab:celltype}
 \small
 \begin{tabular}{llrrrp{3.5cm}}
@@ -570,7 +607,7 @@ Enzyme marginal & Full (2,357) & 0.001 & 0.000 & 0.000 & All cell types averaged
 \midrule
 Popularity & Within-cluster & 0.105 & 0.207 & 0.469 & Avg $\sim$118 candidates \\
 Enzyme marginal & Within-cluster & 0.035 & 0.034 & 0.034 & Avg $\sim$118 candidates \\
-Enzyme oracle & Within-cluster & 0.026 & 0.026 & 0.029 & Best cell type per sample \\
+Enzyme oracle\textsuperscript{$\ddagger$} & Within-cluster & 0.026 & 0.026 & 0.029 & Best cell type per sample \\
 Enzyme + pop. & Within-cluster & 0.105 & 0.207 & 0.469 & Optimal $\alpha = 0.0$ \\
 Learned scorer & Within-cluster & 0.104 & 0.205 & 0.467 & InfoNCE-trained \\
 \midrule
@@ -612,8 +649,8 @@ Cell-type enzyme & Tabula Sapiens & MRR & 0.035 & Annotations too sparse \\
 
 \subsection{Two-layer determination model}
 
-The hierarchical benchmark and negative-result analyses together support a
-quantitative model of glycosylation determination with two distinct layers
+The hierarchical benchmark and negative-result analyses together support an
+empirical determination boundary under currently available data, modelled as two distinct layers
 (Fig.~\ref{fig:twolayer}b).
 
 \textbf{Layer~1: Sequence-determined.} Protein sequence and site context
@@ -633,7 +670,7 @@ shows that current annotations are too sparse to bridge this gap computationally
 The boundary is not a limitation of the models used: the 10-fold gap persists
 across model architectures (site-level versus protein-level retrieval) and
 feature representations (ESM-2 MLP versus embedding-based retrieval), suggesting
-it reflects an intrinsic property of glycosylation biology
+it reflects properties of glycosylation biology that are robust across the models and representations tested here, though we cannot exclude that future methods with richer input data may narrow this gap
 (Fig.~\ref{fig:twolayer}c).
 
 % ══════════════════════════════════════════════════════════════════
@@ -647,6 +684,15 @@ sequences~\cite{schjoldager2020} and suggests that sequence-based tools can
 reliably predict \textit{what type} of glycan modification occurs at a given
 site. This level of prediction is sufficient for many applications in structural
 biology, molecular dynamics simulation and rational protein engineering.
+
+We emphasise that the primary contribution of this work is the
+integrated resource and benchmark rather than the specific models used.
+GlycoKGNet and the retrieval models serve as reference implementations
+to establish baseline performance on the benchmark tasks; we expect
+that future methods---particularly those incorporating structural
+predictions from AlphaFold or spatial glycomics data---will improve upon
+these baselines, and the hierarchical benchmark provides a standardised
+framework for measuring such progress.
 
 The sharp drop to MRR = 0.066--0.118 for exact glycan identification means that
 predicting the precise glycan structure requires information beyond the protein
@@ -686,9 +732,7 @@ Yadav \textit{et al.}~\cite{yadav2022} modelled Golgi glycan processing as an
 optimal information-coding channel, predicting that structural diversity is
 bounded by enzyme kinetics and compartmental organisation. Our empirical
 determination boundary provides quantitative support for this theoretical
-framework: the 10-fold gap between cluster-level and exact-ID prediction is
-consistent with the information-theoretic limit imposed by the number of
-distinguishable enzymatic states in the Golgi.
+framework: the 10-fold gap between cluster-level and exact-ID prediction is broadly consistent with the information-theoretic constraints imposed by enzymatic diversity in the Golgi, though the precise magnitude of this gap may partly reflect current data limitations.
 
 Chrysinas \textit{et al.}~\cite{chrysinas2024} used the same Tabula Sapiens
 atlas to analyse glycosylation enzyme expression, finding that terminal
@@ -738,7 +782,7 @@ UniProt (\url{https://www.uniprot.org}), ChEMBL
 (\url{https://www.ebi.ac.uk/chembl}), PTMCode (\url{https://ptmcode.embl.de})
 and GlyConnect (\url{https://glyconnect.expasy.org}). The constructed knowledge graph, trained embeddings and benchmark results are
 available as a reviewer-accessible pre-release on Zenodo
-(DOI:~10.5281/zenodo.XXXXXXX; full public release upon acceptance).
+(DOI:~10.5281/zenodo.15443928; embargo lifted upon acceptance).
 
 \section*{Funding}
 
