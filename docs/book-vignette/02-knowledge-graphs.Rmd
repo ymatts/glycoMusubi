@@ -1,0 +1,63 @@
+# Knowledge Graphs for Bioinformatics {#knowledge-graphs}
+
+This chapter introduces the computational machinery behind glycoMusubi. We define knowledge graphs, compare them with alternative data representations, explain embedding methods and link prediction, and survey existing biomedical knowledge graphs to position glycoMusubi in the broader landscape.
+
+## What Is a Knowledge Graph?
+
+A knowledge graph (KG) is a collection of typed entities (nodes) connected by typed relationships (edges), typically stored as subject--predicate--object triples such as `(Asparagine, is_a, Amino_Acid)` or `(MGAT1, catalyzes, GlcNAc_transfer_reaction)`. More formally, a knowledge graph $\mathcal{G} = (\mathcal{E}, \mathcal{R}, \mathcal{T})$ consists of a set of entities $\mathcal{E}$ (each carrying a type label), a set of relation types $\mathcal{R}$ (the edge labels), and a set of triples $\mathcal{T} \subseteq \mathcal{E} \times \mathcal{R} \times \mathcal{E}$ representing the known facts. When the entities and edges carry multiple types, the graph is called heterogeneous. glycoMusubi is heterogeneous in precisely this sense, comprising 10 node types and 14 relation types.
+
+Every fact in a KG is a triple $(h, r, t)$ where $h$ is the head entity, $r$ is the relation, and $t$ is the tail entity. To make this concrete, consider a chain of triples from glycoMusubi: the protein P02768 is `glycosylated_at` the site SITE::P02768_184_N-linked, which `has_glycan` the glycan G00051MO, which in turn `has_motif` core_fucose. Meanwhile, the enzyme Q10469 `catalyzes` the reaction R-HSA-446199. These multi-hop paths --- from protein through site and glycan to motif, or from enzyme through reaction to product --- are the fundamental unit of reasoning in a knowledge graph, and they enable the complex queries that motivate glycoMusubi's design.
+
+## Knowledge Graphs in Context
+
+Different data representations serve different purposes, and it is worth understanding why knowledge graphs are preferred over alternatives for this application. Relational databases organise data into fixed tables connected by foreign keys and queried with SQL. They excel at ACID transactions and well-defined joins, but their rigid schemas make it costly to integrate heterogeneous sources, and deep multi-table joins become prohibitively expensive. Graph databases such as Neo4j adopt a property graph model that supports path queries and traversals through Cypher or Gremlin, making them excellent for interactive exploration. However, they lack native support for the machine-learning-based inference that is central to knowledge graph analysis.
+
+Knowledge graphs occupy a productive middle ground between these paradigms. They provide enough structure for schema enforcement while remaining flexible enough to integrate heterogeneous sources under a unified entity-relation framework. Critically, KGs support embedding-based reasoning --- the ability to learn continuous vector representations of entities and relations that enable link prediction --- which is not natively available in relational or graph databases. glycoMusubi uses the knowledge graph approach because glycobiology data is inherently multi-source (drawn from six databases), multi-typed (spanning 10 entity types), and sparse, with most possible relationships remaining unobserved. This sparsity makes link prediction the primary analytical task.
+
+## Knowledge Graph Embeddings
+
+Knowledge graph embedding (KGE) methods learn continuous vector representations for entities and relations such that the geometric relationships between vectors reflect the semantic relationships in the graph. Three foundational models illustrate the key ideas.
+
+TransE [@bordes2013translating] models relations as translations in embedding space, positing that $\mathbf{h} + \mathbf{r} \approx \mathbf{t}$ for a valid triple. The scoring function $f(h, r, t) = -\|\mathbf{h} + \mathbf{r} - \mathbf{t}\|$ captures the intuition that, for example, the vector for MGAT1 plus the vector for "catalyzes" should land near the vector for GlcNAc-transfer. This elegant formulation handles antisymmetric and compositional relations well, but it struggles with symmetric relations (since $\mathbf{h} + \mathbf{r} = \mathbf{t}$ implies $\mathbf{t} + \mathbf{r} \neq \mathbf{h}$ unless $\mathbf{r} = \mathbf{0}$) and with one-to-many mappings.
+
+DistMult [@yang2015embedding] takes a different approach, using a bilinear scoring function with a diagonal relation matrix: $f(h, r, t) = \sum_i h_i \cdot r_i \cdot t_i$. Here each dimension of the relation vector acts as a gate controlling which aspects of the head and tail should match. This model handles symmetric relations and one-to-many patterns naturally, but the scoring function is symmetric in $h$ and $t$, so it cannot distinguish the direction of antisymmetric relations like `substructure_of`.
+
+RotatE [@sun2019rotate] resolves these limitations by modelling relations as rotations in complex vector space: $\mathbf{t} = \mathbf{h} \circ \mathbf{r}$, where $\circ$ is the Hadamard product and each component of $\mathbf{r}$ has unit modulus. Different rotation angles can capture symmetry, antisymmetry, inversion, and composition patterns simultaneously. For glycoMusubi, which contains both symmetric relations (e.g., `interacts_with`) and antisymmetric relations (e.g., `substructure_of`, `catalyzes`), RotatE is a strong baseline choice because it can represent the full spectrum of relational patterns present in the data.
+
+## Link Prediction
+
+Link prediction is the task of predicting missing triples in a knowledge graph. Given a query such as $(h, r, ?)$ or $(?, r, t)$, the model ranks all candidate entities by their score, and the hope is that true but unobserved facts will be ranked highly.
+
+To evaluate link prediction fairly, the community uses the filtered ranking protocol introduced by Bordes et al. [@bordes2013translating]. For each test triple $(h, r, t)$, all corrupted triples are generated by replacing $t$ with every entity in $\mathcal{E}$. These corrupted triples are scored, and those that are actually true (existing in the train, validation, or test sets) are filtered out before computing the rank of the true triple. This filtering step is essential because it avoids penalising a model for ranking a true-but-held-out fact above the test triple.
+
+The standard evaluation metrics capture different aspects of ranking quality. Mean Reciprocal Rank (MRR), computed as $\frac{1}{N}\sum_{i=1}^{N}\frac{1}{\text{rank}_i}$, is sensitive to top-ranked predictions and is the most widely reported metric. Hits@1 measures exact-match accuracy (the fraction of queries where the true entity is ranked first), while Hits@3 and Hits@10 provide progressively more relaxed measures of retrieval quality. Mean Rank (MR) gives a raw average position but is sensitive to outliers.
+
+## Inductive vs Transductive Settings
+
+Most KGE methods operate in the transductive setting, meaning that all entities seen at test time were present during training. The model cannot generalise to entirely new entities that were absent from the training graph. This limitation is particularly relevant for glycobiology, where new glycan structures are continually registered in GlyTouCan and new proteins are annotated in UniProt.
+
+In the inductive setting, test entities may be entirely unseen during training, and the model must rely on entity features rather than memorised embeddings. Approaches to inductive KGE include GraIL, which performs subgraph reasoning around target triples, NodePiece, which constructs representations from learned anchor nodes, and feature-based methods that use entity attributes (such as glycan WURCS strings or protein sequences) as inputs to graph neural networks. glycoMusubi's rich attribute data --- WURCS notation for glycans, amino acid sequences for proteins, and textual descriptions for diseases --- makes it a particularly promising testbed for inductive methods, a theme we return to in Chapter \@ref(kg-embedding).
+
+## Biomedical Knowledge Graphs
+
+glycoMusubi is part of a growing ecosystem of biomedical knowledge graphs, each targeting a specific translational domain. The following table compares the key properties of several prominent examples.
+
+| KG | Nodes | Edges | Node types | Relation types | Domain |
+|:---|------:|------:|-----------:|---------------:|:-------|
+| **DRKG** | 97,238 | 5,874,261 | 13 | 107 | Drug repurposing |
+| **Hetionet** | 47,031 | 2,250,197 | 11 | 24 | Translational medicine |
+| **PrimeKG** | 129,375 | 4,050,249 | 10 | 30 | Precision medicine |
+| **PharmKG** | 188,296 | 1,093,236 | 5 | 29 | Pharmacogenomics |
+| **glycoMusubi** | 78,263 | 2,508,960 | 10 | 14 | Glycobiology |
+
+Table: Comparison of biomedical knowledge graphs.
+
+What sets glycoMusubi apart from these existing resources is its treatment of glycans as first-class entities. Existing biomedical KGs treat glycosylation superficially --- typically as a single post-translational modification type or a gene ontology annotation. glycoMusubi provides deep glycan-level resolution, with individual glycan structures represented as named entities, glycosylation sites linked to specific proteins and amino acid positions, biosynthetic enzymes connected through reaction networks, structural hierarchy captured via substructure relationships, and disease associations recorded at both the glycan and protein levels. This depth enables queries that are simply impossible in general-purpose biomedical KGs, such as: "Which enzymes, when mutated, disrupt the biosynthesis of core-fucosylated biantennary glycans associated with hepatocellular carcinoma?"
+
+## Why Knowledge Graphs Are Suited for Glycobiology
+
+Several characteristics of glycobiology data make knowledge graphs a natural representation. First, glycobiology demands multi-source integration: glycoMusubi unifies six databases with different schemas, identifier systems, and data formats into a single coherent graph. Second, many important questions in glycobiology require multi-hop reasoning --- traversing from protein through site and glycan to motif and onward to disease --- and KG embeddings natively support compositional reasoning over such paths. Third, glycobiology data is profoundly sparse, with most glycan--protein, glycan--disease, and enzyme--reaction relationships remaining unknown, and link prediction is designed precisely for this setting. Finally, glycobiology inherently involves heterogeneous entity types --- sugars, proteins, enzymes, diseases, and drugs --- interacting through diverse relationship types, which is exactly the scenario that heterogeneous knowledge graphs are built to model.
+
+## Summary
+
+Knowledge graphs represent structured facts as typed triples, enabling both schema-based querying and embedding-based inference. KGE methods such as TransE, DistMult, and RotatE learn vector representations that support link prediction --- ranking candidate completions for incomplete triples. glycoMusubi leverages these techniques to address the unique challenges of glycobiology: multi-source data, sparse annotations, and complex multi-hop relationships. In the next chapter, we describe the architecture of glycoMusubi in detail.

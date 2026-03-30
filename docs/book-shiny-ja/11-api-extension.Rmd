@@ -1,0 +1,251 @@
+# API拡張とカスタマイズ {#api-extension}
+
+この章では、新しいモジュールの追加方法、plumberによるREST APIの構築、新データソースの統合、カスタム可視化の実装、そしてコントリビューションのガイドラインを解説します。glycoMusubi Shinyアプリの拡張を考えているすべての開発者・研究者に向けた内容です。
+
+## 新モジュールの追加
+
+Shinyアプリにおけるモジュールとは、名前空間を分離したUI関数とserver関数のペアです。新機能を追加する際は `modules/mod_new_feature.R` というファイルを作成し、この規約に従います。
+
+```r
+mod_new_feature_ui <- function(id) {
+  ns <- NS(id)
+  tagList(
+    selectInput(ns("dataset"), "Dataset", choices = NULL),
+    plotly::plotlyOutput(ns("main_plot")),
+    DT::DTOutput(ns("detail_table"))
+  )
+}
+
+mod_new_feature_server <- function(id, kg_nodes, kg_edges) {
+  moduleServer(id, function(input, output, session) {
+    observe({
+      updateSelectInput(session, "dataset", choices = unique(kg_nodes$type))
+    })
+    filtered <- reactive({
+      req(input$dataset)
+      kg_nodes[kg_nodes$type == input$dataset, ]
+    })
+    output$main_plot <- plotly::renderPlotly({
+      plotly::plot_ly(filtered(), x = ~score, type = "histogram")
+    })
+    output$detail_table <- DT::renderDT({
+      DT::datatable(filtered(), options = list(pageLength = 15))
+    })
+  })
+}
+```
+
+`NS(id)`による名前空間の分離は、複数のモジュールインスタンスが同じアプリ内で衝突しないことを保証します。server関数はグローバルデータを引数として受け取る設計にしてください。`global.R`で読み込んだデータをグローバル変数としてアクセスするのではなく、明示的に渡すことで、モジュールのテスト可能性と再利用性が向上します。
+
+### app.Rへの登録
+
+```r
+# UI: ナビゲーションパネルを追加
+bslib::nav_panel("New Feature", mod_new_feature_ui("new_feature_1"))
+
+# Server: モジュールを呼び出し
+mod_new_feature_server("new_feature_1", kg_nodes = kg_nodes, kg_edges = kg_edges)
+```
+
+UI側では `bslib::nav_panel` でタブを一つ追加するだけです。server側ではモジュールサーバー関数を呼び出し、`global.R`で読み込んだデータを渡します。モジュールIDの文字列（ここでは `"new_feature_1"`）はUI関数とserver関数で一致させる必要があります。
+
+## plumber REST API
+
+Shinyアプリはインタラクティブな探索に優れていますが、プログラマティックなアクセスが必要な場面も多くあります。パイプラインの一部としてKGデータを取得したい場合や、外部システムから糖鎖情報を参照したい場合には、REST APIが適しています。plumberパッケージを使えば、Rの関数をそのままHTTPエンドポイントとして公開できます。
+
+### APIの定義
+
+`api/plumber.R`を作成し、よく使われるKGクエリをエンドポイントとして定義します。
+
+```r
+library(plumber)
+library(arrow)
+library(dplyr)
+
+kg_dir   <- Sys.getenv("GLYCOKG_KG_DIR", unset = "../data/kg")
+nodes_ds <- open_dataset(file.path(kg_dir, "nodes.parquet"))
+edges_ds <- open_dataset(file.path(kg_dir, "edges.parquet"))
+
+#* @get /api/v1/nodes/search
+#* @param q Search query
+#* @param limit Max results (default 50)
+function(q, limit = 50) {
+  nodes_ds |>
+    filter(grepl(q, name, ignore.case = TRUE)) |>
+    head(as.integer(limit)) |> collect()
+}
+
+#* @get /api/v1/node/<id>/neighbors
+function(id) {
+  nbr <- edges_ds |> filter(source_id == id | target_id == id) |> collect()
+  all_ids <- unique(c(nbr$source_id, nbr$target_id))
+  nodes_ds |> filter(node_id %in% all_ids) |> collect()
+}
+
+#* @get /api/v1/protein/<uniprot>/glycans
+function(uniprot) {
+  glycan_ids <- edges_ds |>
+    filter(source_id == uniprot, edge_type == "has_glycan") |>
+    collect() |> pull(target_id)
+  nodes_ds |> filter(node_id %in% glycan_ids, type == "glycan") |> collect()
+}
+```
+
+検索エンドポイント `/api/v1/nodes/search` はノード名に対する部分一致検索を提供します。隣接ノードエンドポイント `/api/v1/node/<id>/neighbors` は指定したノードに隣接するすべてのノードを返し、KG Explorerモジュールと同等の情報をプログラマティックに取得できます。タンパク質-糖鎖エンドポイント `/api/v1/protein/<uniprot>/glycans` は、UniProt IDを指定してそのタンパク質に関連する糖鎖を一覧します。
+
+### Docker複数サービス構成
+
+ShinyアプリとREST APIを同じデータボリュームを共有する2つのサービスとして起動します。YAMLアンカーを使うと、ボリュームと環境変数の定義を重複させずに済みます。
+
+```yaml
+services:
+  glycokg-app:
+    build: .
+    ports: ["3838:3838"]
+    volumes: &vols
+      - ./data/kg:/srv/data/kg:ro
+      - ./data/processed:/srv/data/processed:ro
+    environment: &env
+      GLYCOKG_KG_DIR: /srv/data/kg
+      GLYCOKG_DATA_DIR: /srv/data/processed
+  glycokg-api:
+    build: { context: ., dockerfile: Dockerfile.api }
+    ports: ["8000:8000"]
+    volumes: *vols
+    environment: *env
+```
+
+APIはデフォルトでポート8000で起動します。Nginxリバースプロキシの背後に配置する場合は、`/api/` パスプレフィックスでShinyアプリと区別するルーティングを設定します。
+
+## 新データソースの追加
+
+外部データベースや新しいアノテーションファイルを統合したい場合は、`global.R`に新しい環境変数と読み込みステップを追加し、docker-composeでマウントします。
+
+```r
+# global.R への追加
+annot_dir <- Sys.getenv("GLYCOKG_ANNOT_DIR", unset = "../data/annotations")
+site_annotations <- arrow::read_parquet(
+  file.path(annot_dir, "site_annotations.parquet")
+)
+
+# 必須ファイルの存在チェック（フェイルファスト）
+required <- c(
+  file.path(kg_dir, "nodes.parquet"),
+  file.path(annot_dir, "site_annotations.parquet")
+)
+missing <- required[!file.exists(required)]
+if (length(missing)) stop("Missing files:\n", paste(" -", missing, collapse = "\n"))
+```
+
+フェイルファストのパターンは重要です。起動時に必須ファイルの欠損を検出すれば、ユーザーが操作中に不可解なエラーに遭遇することを防げます。docker-compose.ymlにはボリューム `./data/annotations:/srv/data/annotations:ro` と環境変数 `GLYCOKG_ANNOT_DIR=/srv/data/annotations` を追加します。
+
+データソースの追加に際しては、スキーマ定義（`schemas/`ディレクトリ内のYAMLファイル）も更新し、新しいノードタイプやエッジタイプがバリデーションパイプラインに認識されるようにしてください。
+
+## カスタム可視化
+
+### plotlyチャート
+
+最も手軽な可視化手段はplotlyです。ggplot2で作成したプロットを`ggplotly()`でインタラクティブ化する方法と、plotlyのネイティブAPIを直接使う方法があります。
+
+```r
+output$scatter <- plotly::renderPlotly({
+  p <- ggplot2::ggplot(filtered(), ggplot2::aes(mass, score, color = type)) +
+    ggplot2::geom_point(alpha = 0.6) + ggplot2::theme_minimal()
+  plotly::ggplotly(p)
+})
+```
+
+ggplot2ベースのアプローチは馴染みのある文法で記述でき、テーマやスケールの細かい調整が容易です。一方、plotlyネイティブAPIはアニメーションやカスタムホバーテキストなど、高度なインタラクティビティに向いています。
+
+### D3.js（r2d3経由）
+
+plotlyでは表現しきれない高度なカスタム可視化には、r2d3パッケージを使ってD3.jsのスクリプトをShinyに統合できます。
+
+```r
+output$custom_d3 <- r2d3::renderD3({
+  r2d3::r2d3(data = jsonlite::toJSON(graph_data()),
+              script = "www/js/glycan_tree.js", d3_version = 7)
+})
+```
+
+JavaScriptファイルは `www/js/` ディレクトリに配置します。D3.jsはSVGベースの描画に長けており、糖鎖構造をSNFG（Symbol Nomenclature for Glycans）記法で描画するカスタムスクリプトなどに適しています。
+
+### Cytoscape.js（cyjShiny経由）
+
+visNetworkが大規模サブグラフで描画性能が低下する場合、cyjShinyパッケージがCytoscape.jsベースの代替手段を提供します。
+
+```r
+output$cytoscape_graph <- cyjShiny::renderCyjShiny({
+  cyjShiny::cyjShiny(cyjShiny::dataFramesToJSON(
+    data.frame(id = c("G1", "P1"), name = c("GlcNAc", "MUC1")),
+    data.frame(source = "P1", target = "G1", interaction = "has_glycan")
+  ), layoutName = "cose")
+})
+```
+
+Cytoscape.jsはCoSE（Compound Spring Embedder）レイアウトなど、ネットワーク科学に特化したレイアウトアルゴリズムを多数サポートしており、数千ノード規模のグラフでもvisNetworkより安定して描画できます。
+
+## iframe埋め込み
+
+glycoMusubiアプリを他のWebサイトやツールに組み込むには、iframeが最もシンプルな方法です。
+
+```html
+<iframe src="https://glycokg.example.edu/" width="100%" height="800"
+        frameborder="0" allow="fullscreen"></iframe>
+```
+
+ラボのWebサイト、論文の補足資料ページ、あるいは他のバイオインフォマティクスポータルに埋め込むことで、ユーザーにシームレスなアクセスを提供できます。
+
+### データエクスポートボタン
+
+ユーザーがフィルタ結果をダウンロードできるよう、エクスポートボタンを追加するのも一般的な拡張です。
+
+```r
+output$download_csv <- downloadHandler(
+  filename = function() paste0("glycokg_export_", Sys.Date(), ".csv"),
+  content  = function(file) data.table::fwrite(filtered(), file)
+)
+```
+
+### Rラッパーによるヘッドレスアクセス
+
+REST APIが稼働していれば、Rスクリプトからプログラマティックにデータを取得できます。以下のようなラッパー関数をパッケージに含めておくと、他の研究者がパイプラインに組み込みやすくなります。
+
+```r
+glycokg_search <- function(query, limit = 50, base = "http://localhost:8000") {
+  url <- paste0(base, "/api/v1/nodes/search?q=",
+                utils::URLencode(query), "&limit=", limit)
+  httr2::request(url) |>
+    httr2::req_perform() |>
+    httr2::resp_body_json(simplifyVector = TRUE)
+}
+```
+
+この関数はhttr2パッケージを使用しています。httr2はhttrの後継で、パイプ演算子によるリクエスト構築、自動リトライ、レスポンスのパース機能が統合されています。
+
+## コントリビューションガイドライン
+
+glycoMusubiプロジェクトへの貢献は歓迎されます。以下の手順に従ってください。
+
+まず、リポジトリをフォークし、`main`ブランチからフィーチャーブランチを作成します。機能ごとに1つのモジュールファイルを `modules/` ディレクトリに配置し、[tidyverse style guide](https://style.tidyverse.org/)に準拠したコードを書きます。UIテストには`shinytest2`を、ユニットテストには`testthat`を使用してください。PRを提出する前に `lintr::lint_dir()` を実行し、スタイル違反がないことを確認します。
+
+```r
+test_that("node search returns results", {
+  app <- shinytest2::AppDriver$new(app_dir = "shiny_app/", name = "search-test")
+  app$set_inputs(search_query = "GlcNAc")
+  app$click("search_btn")
+  expect_true(nrow(app$get_value(output = "results_table")) > 0)
+  app$stop()
+})
+```
+
+PRには変更内容の説明と、新たに追加した環境変数がある場合はその詳細を記載してください。新しいモジュールを追加した場合は、デモモードでの動作確認結果も添えると、レビュアーの負担が軽減されます。
+
+テストの実行は以下のコマンドで行います。
+
+```r
+testthat::test_dir("tests/")
+shinytest2::test_app("shiny_app/")
+```
+
+テストがすべて通過し、lintエラーがゼロであることを確認してから、PRをオープンしてください。

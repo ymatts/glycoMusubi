@@ -1,0 +1,18 @@
+book_filename: "glycoMusubi-vignettes"
+output_dir: "_book"
+delete_merged_file: true
+language:
+  ui:
+    chapter_name: "Chapter "
+rmd_files:
+  - index.Rmd
+  - 01-glycobiology-primer.Rmd
+  - 02-knowledge-graphs.Rmd
+  - 03-glycoMusubi-architecture.Rmd
+  - 04-etl-pipeline.Rmd
+  - 05-kg-embedding.Rmd
+  - 06-hierarchical-benchmark.Rmd
+  - 07-celltype-analysis.Rmd
+  - 08-r-workflow.Rmd
+  - 09-use-cases.Rmd
+  - 10-references.Rmd

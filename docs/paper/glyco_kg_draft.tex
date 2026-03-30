@@ -1,0 +1,842 @@
+\documentclass[11pt,a4paper]{article}
+
+% ── Packages ──
+\usepackage[margin=2.5cm]{geometry}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{graphicx}
+\usepackage[dvipsnames]{xcolor}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta, positioning, shapes.geometric, fit, calc}
+\usepackage[numbers,sort&compress]{natbib}
+\usepackage{hyperref}
+\hypersetup{colorlinks=true,linkcolor=blue,citecolor=blue,urlcolor=blue}
+\usepackage[protrusion=true,expansion=false]{microtype}
+\usepackage{enumitem}
+\setlist{nosep}
+
+% ── Layout tweaks ──
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{0.6em}
+\renewcommand{\baselinestretch}{1.15}
+
+% ── Custom commands ──
+\newcommand{\HRule}{\rule{\linewidth}{0.4pt}}
+
+% ══════════════════════════════════════════════════════════════════
+\begin{document}
+
+% ── Title ──
+\begin{center}
+{\LARGE\bfseries Hierarchical glycan prediction from protein sequence\\
+reveals a determination boundary at the structural-class level}
+
+\vspace{1em}
+{\large Yusuke Matsui$^{1,2,*}$}\\[0.3em]
+{\normalsize $^1$Biomedical and Health Informatics Unit, Department of Integrated Health Sciences,\\
+Nagoya University Graduate School of Medicine, Nagoya, Japan\\
+$^2$Institute for Glyco-core Research (iGCORE), Nagoya University, Nagoya, Aichi, Japan}\\[0.3em]
+{\normalsize $^*$Corresponding author: Y.\ Matsui}
+\end{center}
+\HRule
+\vspace{0.5em}
+
+% ══════════════════════════════════════════════════════════════════
+\section*{Abstract}
+
+\textbf{Motivation:} Predicting which glycan structures are attached at specific
+protein sites remains an open challenge. Glycobiology data are fragmented
+across specialised databases, and the relative contributions of protein
+sequence versus cellular environment to glycan identity have not been
+quantified.
+
+\textbf{Results:} We present glycoMusubi, an integrated knowledge graph spanning
+78,263 nodes (10 entity types) and 2.5 million edges (14 relation types) from
+six public databases. Using glycoMusubi, we establish a hierarchical benchmark
+decomposing glycan prediction into six tasks of increasing specificity, from
+N-linked site classification (F1 = 0.924) through structural cluster prediction
+(Hits@5 = 0.786) to exact glycan identification (MRR = 0.066--0.118). The
+10-fold gap between cluster-level and exact-ID performance reveals a
+quantitative determination boundary: protein sequence predicts structural class
+reliably, but exact glycan identity requires additional information. Integration
+of single-cell enzyme expression data (Tabula Sapiens; 748 cell types) did not
+improve prediction beyond a frequency baseline, because current enzyme--glycan
+annotations cover only 39\% of N-linked glycans. These results delineate two
+layers of glycosylation determination and identify annotation sparsity as the
+primary bottleneck.
+
+\textbf{Availability and implementation:}
+The glycoMusubi software and benchmark suite are available at
+\url{https://github.com/ymatts/glycoMusubi} under the MIT licence.
+The knowledge graph and trained models will be deposited on Zenodo.
+
+\textbf{Contact:} Y.\ Matsui
+
+\textbf{Supplementary information:} Supplementary data are available at
+\textit{Bioinformatics} online.
+
+\HRule
+
+% ══════════════════════════════════════════════════════════════════
+\section{Introduction}
+
+Glycans---complex carbohydrates covalently attached to proteins and
+lipids---mediate virtually every cell-surface biological process, from immune
+recognition and cell signalling to pathogen entry and cancer
+progression~\cite{varki2017,reily2019}. Despite decades of structural
+characterisation, a fundamental question remains unanswered computationally:
+given a protein sequence and a cellular context, which glycan structures will
+be attached at specific sites?
+
+This question is challenging because glycosylation is determined at multiple
+levels. The protein sequence and local site context influence which
+glycosyltransferases can access the substrate, constraining the structural
+class of possible glycans~\cite{schjoldager2020,narimatsu2019}. However, the
+exact glycan structure further depends on the complement of glycosylation
+enzymes expressed in the cell, the availability of nucleotide sugar donors and
+the kinetics of competing biosynthetic
+pathways~\cite{stanley2022,varki2022essentials}. The relative contribution of
+these `sequence-determined' versus `environment-determined' factors has been
+discussed qualitatively~\cite{schjoldager2020} but never quantified
+systematically.
+
+Recent computational approaches have tackled parts of this problem.
+InSaNNE~\cite{kellman2024} trained a recurrent neural network to predict glycan
+structures from protein sequence features, achieving AUC = 0.92 on a curated set
+of 199 glycans across 57 glycosites. However, the approach evaluates binary
+presence/absence rather than retrieval ranking, uses a restricted candidate set
+and does not decompose the hierarchy of prediction difficulty.
+Bojar and Lisacek~\cite{bojar2022} reviewed glycoinformatics and machine learning
+approaches, noting the gap between glycan property prediction and the inverse
+problem of predicting glycans from protein context.
+CoNglyPred~\cite{congly2025} combined ESM-2 and AlphaFold2 features for N-linked
+site prediction, complementing our Task~1. GlycanML~\cite{glyml2024} established
+a benchmark of 11 glycan property prediction tasks (immunogenicity, taxonomy,
+tissue expression), but these predict \textit{from} glycan structures rather than
+\textit{predicting} glycan structures from protein context.
+
+On the biological side, Yadav \textit{et al.}~\cite{yadav2022} modelled Golgi
+glycan processing as an optimal information-coding channel, showing that
+structural diversity is bounded by enzyme kinetics---a theoretical framework
+consistent with our empirical determination boundary.
+Chrysinas \textit{et al.}~\cite{chrysinas2024} analysed glycosylation enzyme
+expression from the same Tabula Sapiens atlas we use, finding that terminal
+processing enzymes are highly cell-type-specific while core pathway enzymes are
+ubiquitous. Their qualitative observation aligns with our quantitative finding
+that enzyme expression alone does not resolve exact glycan identity.
+Glycoimpact~\cite{glycoimpact2024} defined an amino acid substitution scoring
+matrix for glycan constraints, introducing the concept of `bounded biosynthesis'
+where sequence constrains but does not determine the glycan.
+
+Progress has also been hindered by data fragmentation. Glycan structures reside
+in GlyTouCan~\cite{tiemeyer2017}, protein annotations in
+UniProt~\cite{uniprot2023}, enzyme--glycan biosynthetic relationships in
+GlyGen~\cite{york2020}, inhibitor activities in ChEMBL~\cite{zdrazil2024} and
+site-specific glycan assignments in GlyConnect~\cite{alocci2019}. Each database
+uses distinct schemas and identifiers, making integrated analysis difficult.
+Recent advances in glycan representation---SweetNet~\cite{burkholz2022} for graph
+neural network encoding, GIFFLAR~\cite{thomes2024} for higher-order
+representations and glycowork for motif-based analysis~\cite{thomes2021}---have
+improved glycan property prediction but have not addressed the inverse problem of
+predicting glycans from protein context, nor quantified the determination
+boundary.
+
+Here we make three contributions. First, we construct \textbf{glycoMusubi}, a
+heterogeneous knowledge graph integrating 78,263 nodes (10 types) and 2,508,960
+edges (14 relation types) from six public databases through an automated,
+reproducible ETL pipeline. Second, we establish a \textbf{hierarchical prediction
+benchmark} comprising six tasks of increasing specificity, from binary N-linked
+site classification to exact glycan identification over 2,357 candidates. Third,
+we perform a \textbf{systematic investigation of cellular context} using
+single-cell enzyme expression data, providing the first quantitative evidence
+that current enzyme--glycan annotations are insufficient to bridge the
+determination gap. Together, these analyses delineate a boundary between
+sequence-predictable structural classes and environment-dependent glycan
+identity, and identify specific data gaps that must be filled to advance the
+field.
+
+% ══════════════════════════════════════════════════════════════════
+\section{Materials and methods}
+
+\subsection{Knowledge graph construction}
+
+The glycoMusubi ETL pipeline comprises four automated stages: \textbf{download},
+\textbf{clean}, \textbf{build} and \textbf{validate} (Supplementary Fig.~S1).
+Data are fetched from six public databases through rate-limited API clients
+with configurable retry logic and exponential backoff.
+
+\textbf{Data sources.} GlyGen (v1.28, accessed January 2025) provides
+glycosyltransferase annotations and glycan master lists. GlyTouCan (v3.2.1,
+accessed January 2025) provides glycan structures in WURCS notation via the
+GlyCosmos SPARQList API. UniProt (release 2024\_06) provides protein annotations
+including disease associations, genetic variants and glycosylation site features.
+ChEMBL (v34, accessed February 2025) provides glycosyltransferase inhibitor
+activity data. PTMCode (v3) provides post-translational modification site-level
+crosstalk network data. GlyConnect (v2.0, accessed March 2025) provides
+site-specific glycan assignments with protein and position annotation. Reactome
+(release 88, accessed February 2025) provides curated biosynthetic reaction
+pathways linking enzymes to glycan products.
+
+\textbf{Schema enforcement.} The KG schema defines 10 node types and 14
+relation types (Supplementary Table~S1). Node identifiers are validated against
+source-specific patterns (GlyTouCan: \texttt{\^{}G\textbackslash d\{5\}[A-Z]\{2\}\$};
+UniProt: Swiss-Prot accession format; ChEMBL: \texttt{\^{}CHEMBL\textbackslash d+\$}).
+Edges are constrained to declared source--target type pairs. Validation checks
+include orphan node detection, duplicate edge removal, self-loop elimination
+and cycle detection in acyclic relations.
+
+\textbf{Glycosylation site processing.} UniProt glycosylation sites are
+filtered to retain entries with experimental or strong sequence-similarity
+evidence (evidence codes ECO:0000269 [experimental], ECO:0000303 [traceable
+author statement] and ECO:0000250 [sequence similarity to experimentally
+characterised orthologues]), discarding computational predictions and
+low-confidence annotations. Site positions are normalised to canonical isoform
+coordinates using the standardised format
+\texttt{SITE::<UniProtID>::<Position>::<Residue>}.
+
+\textbf{PTM crosstalk integration.} PTMCode crosstalk edges (minimum confidence
+score 0.30) link pairs of modification sites with evidence of functional
+interaction across six PTM types (phosphorylation, methylation, acetylation,
+ubiquitination, SUMOylation and glycosylation).
+
+\subsection{Knowledge graph embedding model}
+
+To obtain glycan representations for structural clustering and retrieval, we
+trained a knowledge graph embedding model (GlycoKGNet) on the glycoMusubi graph.
+
+\textbf{Modality-specific encoders.} Glycan nodes are encoded by a
+GlycanTreeEncoder that operates on the WURCS-parsed branching tree structure
+through bottom-up tree message-passing layers (3 layers, hidden dimension 256)
+with child attention and GRU state updates, followed by top-down refinement and
+attention pooling, producing 256-dimensional glycan embeddings. The tree encoder
+explicitly represents monosaccharide identity, linkage type (position and
+anomeric configuration), and branching topology---features that distinguish it
+from sequence-based approaches such as SweetNet~\cite{burkholz2022}
+(Supplementary Section~S12 provides a detailed architecture comparison and
+ablation study). The embedding dimension (256) was selected via grid search over
+$\{64, 128, 256, 512\}$ on validation MRR (Supplementary Table~S16). Protein
+nodes are encoded by projecting pre-computed ESM-2~\cite{lin2023} per-residue
+embeddings (650M parameter model, frozen) through a site-aware MLP that
+incorporates glycosylation site positional information. Disease and pathway nodes
+are encoded by projecting PubMedBERT text embeddings (110M parameters, frozen)
+through learned MLPs.
+
+\textbf{Link prediction training.} The model is trained on the KG link prediction
+task using type-constrained negative sampling (64 negatives per positive) with
+self-adversarial weighting. The scoring function combines DistMult and RotatE
+sub-scorers with per-relation adaptive weights. The training loss is binary
+cross-entropy with structural contrastive regularisation (InfoNCE,
+$\tau = 0.07$) and L2 regularisation. Optimisation uses Adam with cosine
+annealing and mixed-precision training.
+
+\textbf{Inductive evaluation.} We train in the inductive setting, holding out
+15\% of entities (including their edges) during training and evaluating the
+model's ability to embed and score triples involving unseen entities. The
+inductive filtered MRR on the held-out set is 0.207 (Hits@10 = 0.522),
+demonstrating that the modality-specific encoders generalise to entities not
+seen during training. While the overall inductive MRR is lower than transductive
+baselines (e.g.\ TransE MRR = 0.474; Supplementary Table~S4), GlycoKGNet
+substantially outperforms TransE on the biologically critical
+\texttt{has\_glycan} relation (3.5$\times$ improvement; Supplementary Table~S5).
+This is essential for the glycan prediction application, where the model must
+embed glycans that may not be present in the training KG.
+
+\textbf{Preventing information leakage.} Glycan hierarchy edges (parent\_of,
+child\_of, subsumes, subsumed\_by) could leak structural information across
+splits. To prevent this, we remove all hierarchy edges involving held-out
+entities from the training graph. The protein-stratified split for downstream
+tasks further ensures that no protein or its associated sites appear in both
+training and test sets. We verified that removing all glycan hierarchy edges (parent\_of, child\_of,
+subsumes, subsumed\_by) from both KG embedding training and the subsequent
+KMeans clustering input changes Task~5 H@5 by less than 0.02, confirming
+that the downstream results are not driven by hierarchy-mediated leakage
+(Supplementary Table~S13).
+
+\subsection{Hierarchical prediction tasks}
+
+\textbf{N-linked site classification.} A two-layer MLP (256 $\to$ 128 $\to$ 1)
+takes ESM-2 per-residue embeddings at asparagine positions as input and predicts
+N-linked glycosylation probability. Training uses binary cross-entropy with
+class-balanced sampling. Evaluation on held-out proteins reports F1, precision,
+recall and AUC-ROC.
+
+\textbf{Site ranking.} Given a protein with multiple confirmed glycosylation
+sites, a pairwise ranking model scores sites by glycosylation propensity using
+ESM-2 embeddings with a margin-based ranking loss. Evaluation reports Recall@$k$
+and MRR among known sites per protein.
+
+\textbf{Glycosylation type prediction.} A fraction regression model predicts the
+proportional composition of high-mannose, complex, hybrid and unoccupied states
+at each site, using ESM-2 embeddings. The dominant type is taken as the argmax
+prediction; accuracy is computed across four classes.
+
+\textbf{Structural family classification.} An 8-class MLP classifier assigns
+each glycan observation to a structural family derived from glycan taxonomy.
+Input features are ESM-2 per-residue embeddings; evaluation reports top-1 and
+top-2 accuracy.
+
+\textbf{Structural cluster prediction.} Glycan embeddings from the trained KG
+model are clustered by KMeans ($K = 20$, selected by silhouette analysis over
+$K \in \{5, 10, 20, 50, 100\}$; Supplementary Fig.~S2) and the retrieval model's
+top-$k$ cluster assignments (by majority vote among the $k$ nearest glycan
+embeddings) are evaluated against the true glycan's cluster. The retrieval model
+uses cosine similarity between site-level protein representations (ESM-2 MLP) and
+glycan embeddings in the shared 256-dimensional space. The determination boundary
+is robust to cluster granularity: the gap between cluster-level H@5 and exact-ID
+MRR exceeds 5-fold for all tested $K$ values (Supplementary Table~S12).
+
+\textbf{Exact glycan identification.} The same retrieval model ranks all 2,357
+N-linked glycan candidates by cosine similarity to the query protein/site
+representation. Two variants are evaluated: site-level (using per-residue ESM-2
+features at the glycosylation position) and protein-level (using mean-pooled
+ESM-2 features over 3,345 candidates). Evaluation follows the filtered ranking
+protocol~\cite{bordes2013}, reporting MRR, Hits@1, Hits@3, Hits@10 and mean
+rank.
+
+\subsection{Cell-type conditioned glycan prediction}
+
+\textbf{Data preparation.} Cell-type enzyme expression profiles are obtained
+from the Tabula Sapiens atlas~\cite{tabulasapiens2022}: for each of 748 cell
+types and 339 glycosylation-related enzyme genes (defined as all genes annotated
+with glycosyltransferase or glycosidase activity in GlyGen, filtered to those
+present in the Tabula Sapiens expression matrix), the mean log-normalised
+expression value is recorded. Enzyme-to-glycan biosynthetic edges from glycoMusubi
+map each enzyme gene to the set of glycan structures it is known to produce.
+
+\textbf{Within-cluster enzyme scoring.} For each cell type $c$ and glycan $g$ in
+cluster $k$, the enzyme score is:
+\begin{equation}
+s(g, c) = \sum_{e \in \text{enzymes}(g)} \text{expr}(e, c)
+\end{equation}
+where $\text{enzymes}(g)$ is the set of enzyme genes linked to glycan $g$ in the
+KG and $\text{expr}(e, c)$ is the expression level of enzyme $e$ in cell type
+$c$. Glycans with no enzyme links receive a score of zero.
+
+\textbf{Evaluation modes.} Four modes are evaluated within each cluster:
+(1)~\textbf{Marginal}: enzyme scores averaged over all 748 cell types;
+(2)~\textbf{Oracle}: the cell type giving the best rank for the true glycan
+(upper bound on cell-type selection);
+(3)~\textbf{Popularity}: ranking by training-set glycan frequency;
+(4)~\textbf{Enzyme + popularity}: linear blend
+$s_{\text{blend}} = \alpha \cdot s_{\text{enzyme}} + (1 - \alpha) \cdot s_{\text{pop}}$
+with $\alpha$ selected on a validation set.
+
+\textbf{Learned scorer.} A CellTypeGlycanScorer neural network maps enzyme
+expression vectors (339 dimensions) through a two-layer MLP with LayerNorm and
+GELU activation, and glycan embeddings (256 dimensions from the KG model)
+through a parallel projection, producing normalised vectors whose inner product
+(with learnable temperature and per-glycan bias) scores each glycan. Training
+uses InfoNCE loss within each cluster, with cell-type expression averaged across
+the training set (since the true cell type per sample is unknown).
+
+\textbf{Cascade estimation.} The full-ranking cascade MRR can be approximated as
+the product of cluster-level Hits@1 (0.166) and within-cluster MRR under an
+independence assumption. However, since cluster prediction errors systematically
+bias the within-cluster candidate set, we additionally evaluate the cascade
+end-to-end: for each test sample, the model first predicts the cluster, then
+ranks glycans within the predicted cluster. The end-to-end cascade MRR is 0.017,
+compared to the independence-based estimate of 0.017, indicating that the two
+stages are approximately independent in practice.\footnote{This approximate
+independence holds across all five protein-stratified random splits: end-to-end
+MRR ranges from 0.015 to 0.019, while independence estimates range from 0.015
+to 0.018 (relative difference $<$15\% in all cases, well within the bootstrap
+95\% CI width of $\pm$0.004 for cascade MRR).} This end-to-end result confirms
+that neither stage alone is the bottleneck---both cluster prediction (H@1 = 0.166)
+and within-cluster ranking (MRR = 0.105) require improvement.
+
+\subsection{Statistical procedures}
+
+All experiments use a single train/validation/test split stratified by protein
+(no protein appears in multiple splits). To assess stability, we report 95\%
+non-parametric percentile bootstrap confidence intervals (1,000 resamples of the
+test set, sampling with replacement at the protein level to respect the
+stratification) for all primary metrics (Table~\ref{tab:hierarchical}). Additionally, we verified that the key finding---the 10-fold gap between
+cluster-level and exact-ID performance---is robust across five independent
+protein-stratified random splits (Supplementary Table~S11).
+Retrieval metrics are computed under the
+filtered ranking protocol~\cite{bordes2013}, where known true associations are
+excluded from the candidate ranking to avoid trivially inflated scores.
+The two-layer boundary is validated by the consistent
+performance gap across model architectures and feature representations: the
+cluster-level advantage over exact-ID prediction persists for both site-level
+(0.786 versus 0.066) and protein-level (0.786 versus 0.118) models, ruling out
+model-specific artefacts. Because all comparisons are descriptive (performance
+gaps across task granularities rather than competing models on the same task), we
+do not apply multiple-comparison corrections; the consistency across architectures
+serves as the primary evidence of robustness.
+
+\subsection{Implementation}
+
+glycoMusubi is implemented in Python 3.11 using PyTorch and PyTorch Geometric.
+Pre-computed ESM-2 per-residue embeddings and PubMedBERT text embeddings are
+cached as \texttt{.pt} files. Configuration is managed through hierarchical YAML
+files with OmegaConf. The full pipeline---ETL, embedding, prediction,
+evaluation---is executable through scripted entry points. A Docker image with all
+dependencies is provided for reproducible deployment.
+
+% ══════════════════════════════════════════════════════════════════
+\section{Results}
+
+\subsection{Knowledge graph construction}
+
+We constructed glycoMusubi through an automated four-stage ETL pipeline (download,
+clean, build, validate) that integrates data from six public databases
+(Fig.~\ref{fig:kg_benchmark}a). The resulting knowledge graph contains 78,263
+nodes spanning 10 biological entity types (glycans, proteins, enzymes, diseases,
+variants, compounds, PTM sites, motifs, reactions and cellular locations) and
+2,508,960 edges spanning 14 relation types (Table~\ref{tab:stats}).
+
+Identifier normalisation resolves conflicts across databases: UniProt isoform
+accessions are mapped to canonical forms, GlyTouCan accessions are validated
+against source patterns, and glycosylation sites are encoded as structured
+identifiers enabling unambiguous cross-referencing.
+
+\begin{table}[ht]
+\centering
+\caption{glycoMusubi statistics.}
+\label{tab:stats}
+\small
+\begin{tabular}{lrl}
+\toprule
+\textbf{Entity type} & \textbf{Count} & \textbf{Primary source} \\
+\midrule
+Glycan & 58,628 & GlyTouCan \\
+Protein & 4,372 & UniProt \\
+Enzyme & 1,459 & GlyGen \\
+Site & 10,218 & UniProt, PTMCode \\
+Disease & 1,936 & UniProt \\
+Compound & 746 & ChEMBL \\
+Variant & 522 & UniProt \\
+Motif & 181 & GlyTouCan \\
+Reaction & 164 & Reactome \\
+Cellular location & 37 & UniProt \\
+\midrule
+\textbf{Total nodes} & \textbf{78,263} & \\
+\textbf{Total edges} & \textbf{2,508,960} & 14 relation types \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Hierarchical glycan prediction benchmark}
+
+We decomposed glycan prediction into a hierarchy of six tasks, each narrowing
+the candidate space and increasing specificity
+(Fig.~\ref{fig:kg_benchmark}b, Table~\ref{tab:hierarchical}).
+
+\textbf{Task~1: N-linked site classification.} Using ESM-2~\cite{lin2023}
+per-residue embeddings as input to a two-layer MLP, we achieve F1 = 0.924
+(AUC-ROC = 0.825) on held-out proteins, confirming that the local sequence
+context is a strong predictor of N-linked glycosylation potential.
+
+\textbf{Task~2: Site ranking.} An ESM-2-based ranking model achieves
+Recall@3 = 0.683 and MRR = 0.688, indicating that protein sequence features
+capture site-level glycosylation propensity.
+
+\textbf{Task~3: Glycosylation type prediction.} A fraction regression model
+achieves accuracy = 0.844 across four categories (high-mannose, complex, hybrid,
+unoccupied), demonstrating that the structural category of glycosylation is
+partially encoded in the protein sequence.
+
+\textbf{Task~4: Structural family (8 classes).} An ESM-2 MLP achieves top-2
+accuracy = 0.858 and top-1 accuracy = 0.638, suggesting that protein sequence
+reliably narrows the glycan to a small set of structural families.
+
+\textbf{Task~5: Structural cluster ($K = 20$).} Clusters are defined by KMeans
+over KG-derived glycan embeddings (mean cluster size $\sim$118 glycans). A
+site-level retrieval model achieves Hits@5 = 0.786 and Hits@10 = 0.978,
+indicating that protein sequence and site context predict the correct structural
+neighbourhood with high accuracy.
+
+\textbf{Task~6: Exact glycan identification.} Site-level retrieval ranks against
+2,357 N-linked glycans, achieving MRR = 0.066 (Hits@10 = 0.145). Protein-level
+retrieval ranks against 3,345 glycans, achieving MRR = 0.118 (Hits@10 = 0.228).
+The approximately 10-fold gap between cluster-level performance (Task~5) and
+exact identification (Task~6) reveals a quantitative determination boundary.
+
+\textit{Note on metrics.} Each task uses the metric most appropriate to its
+formulation: classification tasks report F1 or accuracy, ranking tasks report
+MRR, and retrieval tasks report Hits@$k$. To enable cross-task comparison, we
+additionally report a normalised ``reduction in candidate space'' in
+Supplementary Table~S6, confirming that the sharp performance drop occurs
+specifically at the cluster-to-exact-ID transition regardless of metric choice.
+
+\begin{table}[ht]
+\centering
+\caption{Hierarchical glycan prediction results. 95\% bootstrap confidence
+intervals (1,000 protein-level resamples) are reported for primary metrics;
+secondary metrics and baselines are point estimates.
+\textsuperscript{\dag}Protein-level MRR exceeds site-level MRR because
+mean-pooled ESM-2 features provide a smoother representation that acts as
+implicit regularisation, offsetting the loss of site-specific positional
+information; the larger candidate set (3,345 vs 2,357) includes O-linked
+glycans, slightly altering the ranking landscape.}
+\label{tab:hierarchical}
+\small
+\begin{tabular}{llllrlr}
+\toprule
+\textbf{Task} & \textbf{Candidates} & \textbf{Model} & \textbf{Metric} & \textbf{Value} & \textbf{Secondary} & \textbf{Value} \\
+\midrule
+N-linked classification & Binary & ESM-2 MLP & F1 & 0.924{\scriptsize$\pm$0.008} & AUC-ROC & 0.825 \\
+Site ranking & Per protein & ESM-2 ranking & Recall@3 & 0.683{\scriptsize$\pm$0.015} & MRR & 0.688 \\
+Glycosylation type & 4 classes & Frac. regression & Accuracy & 0.844{\scriptsize$\pm$0.012} & & \\
+Structural family & 8 classes & ESM-2 MLP & Top-2 Acc & 0.858{\scriptsize$\pm$0.014} & Top-1 Acc & 0.638 \\
+Structural cluster & 20 clusters & Site-level retr. & H@5 & 0.786{\scriptsize$\pm$0.018} & H@10 & 0.978 \\
+Exact glycan (site) & 2,357 glycans & Site-level retr. & MRR & 0.066{\scriptsize$\pm$0.004} & H@10 & 0.145 \\
+Exact glycan (prot.)\textsuperscript{\dag} & 3,345 glycans & Protein-level retr. & MRR & 0.118{\scriptsize$\pm$0.006} & H@10 & 0.228 \\
+\midrule
+\multicolumn{7}{l}{\textit{Baselines for exact glycan identification}} \\
+Random baseline & 2,357 glycans & --- & MRR & 0.001 & H@10 & 0.004 \\
+Popularity baseline & 2,357 glycans & Train frequency & MRR & 0.100 & H@10 & 0.193 \\
+Seq.\ similarity (BLAST) & 2,357 glycans & Nearest neighbour & MRR & 0.043 & H@10 & 0.109 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{O-linked glycan prediction as a control experiment.} The O-linked
+prediction problem provides an instructive contrast. With a substantially smaller
+candidate space (fewer distinct O-linked glycan structures; 112 candidates versus
+2,357 for N-linked, evaluated on 9,288 test samples), site-level retrieval
+achieves MRR~=~0.847 (H@1~=~0.775, H@3~=~0.918; Supplementary Table~S3),
+compared to MRR~=~0.066 for N-linked glycans under the same model architecture.
+This 13-fold performance difference arises despite using identical training
+procedures and model capacity, isolating candidate-space size and glycan
+diversity as the primary factors driving N-linked prediction difficulty rather
+than inherent model limitations or unpredictability of glycosylation. Notably,
+the O-linked result demonstrates that the retrieval architecture is capable of
+near-perfect glycan identification when the candidate space is tractable.
+
+\subsection{Cell-type enzyme expression analysis}
+
+To investigate whether cellular context can bridge the determination gap, we
+developed a cascade model combining sequence-based cluster prediction with
+cell-type-specific enzyme expression scoring (Fig.~\ref{fig:twolayer}a). The
+cascade decomposes glycan prediction as:
+\begin{equation}
+P(\text{glycan} \mid \text{protein, site, cell\_type}) = P(\text{cluster} \mid \text{protein, site}) \times P(\text{glycan} \mid \text{cluster, cell\_type})
+\end{equation}
+
+Using enzyme expression profiles from the Tabula Sapiens single-cell
+atlas~\cite{tabulasapiens2022} (748 cell types, 339 glycosylation-related
+enzyme genes) and enzyme-to-glycan biosynthetic edges from glycoMusubi, we scored
+glycans within each predicted cluster by the expression levels of their
+producing enzymes.
+
+The results reveal a critical data gap (Table~\ref{tab:celltype}). Within the
+cluster context (average $\sim$118 candidates), the popularity baseline achieves
+MRR = 0.105, while the enzyme expression marginal achieves only MRR = 0.035 and
+the oracle achieves MRR = 0.026. The enzyme+popularity blend assigns optimal
+weight $\alpha = 0.0$ to the enzyme component. A learned neural scorer achieves
+MRR = 0.104---matching the popularity baseline.
+
+The root cause is annotation sparsity: only 929 of 2,357 N-linked glycans
+(39.4\%) have any enzyme link in glycoMusubi, and these are concentrated in a
+single mega-cluster containing 1,843 glycans (78\% of all N-linked glycans).
+Of the 20 structural clusters, only one has non-trivial enzyme coverage.
+Crucially, the sparsity is non-uniform across enzyme categories: core pathway
+enzymes (e.g.\ MGAT1, MGAT2, MAN1A1) cover 87\% of annotated glycans but are
+ubiquitously expressed across cell types, providing no discriminative signal.
+Terminal processing enzymes (e.g.\ ST3GAL1--6, FUT1--11, B4GALT1--4) are highly
+cell-type-specific~\cite{chrysinas2024} but have enzyme--glycan annotations for
+only 12\% of N-linked glycans in glycoMusubi. This precisely explains why cell-type
+expression adds no predictive value: the informative enzymes lack glycan
+annotations, while the well-annotated enzymes lack cell-type specificity
+(Supplementary Table~S14).
+
+\textbf{Glycosylation type and prediction difficulty.} Performance varies
+substantially across structural categories. High-mannose glycans, which undergo
+minimal Golgi processing, are predicted with MRR = 0.142 (site-level), while
+complex-type glycans---subject to extensive and variable terminal
+modifications---achieve only MRR = 0.038. Hybrid-type glycans fall between
+(MRR = 0.071). Paucimannose glycans, which undergo trimming but minimal
+elongation, are also well-predicted (MRR = 0.194, 42 candidates). This
+gradient confirms that prediction difficulty correlates with the degree of
+environment-dependent enzymatic processing (Supplementary Table~S15).
+
+\begin{table}[ht]
+\centering
+\caption{Cell-type conditioned glycan prediction.}
+\label{tab:celltype}
+\small
+\begin{tabular}{llrrrp{3.5cm}}
+\toprule
+\textbf{Method} & \textbf{Scope} & \textbf{MRR} & \textbf{H@10} & \textbf{H@50} & \textbf{Note} \\
+\midrule
+Popularity baseline & Full (2,357) & 0.100 & 0.193 & 0.439 & Train frequency \\
+Enzyme marginal & Full (2,357) & 0.001 & 0.000 & 0.000 & All cell types averaged \\
+\midrule
+Popularity & Within-cluster & 0.105 & 0.207 & 0.469 & Avg $\sim$118 candidates \\
+Enzyme marginal & Within-cluster & 0.035 & 0.034 & 0.034 & Avg $\sim$118 candidates \\
+Enzyme oracle & Within-cluster & 0.026 & 0.026 & 0.029 & Best cell type per sample \\
+Enzyme + pop. & Within-cluster & 0.105 & 0.207 & 0.469 & Optimal $\alpha = 0.0$ \\
+Learned scorer & Within-cluster & 0.104 & 0.205 & 0.467 & InfoNCE-trained \\
+\midrule
+Site-level retrieval & Full (2,357) & 0.066 & 0.145 & --- & Sequence only (ref.) \\
+Protein-level retr. & Full (3,345) & 0.118 & 0.228 & --- & Sequence only (ref.) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Systematic negative results}
+
+Several additional approaches failed to improve prediction beyond baselines
+(Table~\ref{tab:negative}). Monosaccharide composition prediction from protein
+sequence yielded $R^2 < 0$ for all sugar types, confirming no learnable
+relationship. Biosynthetic pathway databases (glycowork subgraphs,
+WURCS-based reactions) did not improve over the popularity baseline. RNA
+expression levels from the Human Protein Atlas~\cite{uhlen2015} achieved
+MRR = 0.001, far below the popularity baseline. Enzyme pathway scoring as an
+auxiliary retrieval signal yielded optimal blending weight $\alpha = 1.0$ for the
+retrieval score alone.
+
+\begin{table}[ht]
+\centering
+\caption{Negative results summary.}
+\label{tab:negative}
+\small
+\begin{tabular}{llcrp{3.5cm}}
+\toprule
+\textbf{Approach} & \textbf{Data source} & \textbf{Metric} & \textbf{Value} & \textbf{Interpretation} \\
+\midrule
+Composition pred. & ESM-2 $\to$ monosaccharides & $R^2$ & $< 0$ & Not learnable from sequence \\
+Reaction network & glycowork & MRR & $\leq$ pop. & Annotations too sparse \\
+Tissue expression & HPA RNA consensus & MRR & 0.001 & Bulk tissue insufficient \\
+Enzyme pathway & GlyGen enzyme edges & $\alpha^*$ & 1.0 & No added information \\
+Cell-type enzyme & Tabula Sapiens & MRR & 0.035 & Annotations too sparse \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Two-layer determination model}
+
+The hierarchical benchmark and negative-result analyses together support a
+quantitative model of glycosylation determination with two distinct layers
+(Fig.~\ref{fig:twolayer}b).
+
+\textbf{Layer~1: Sequence-determined.} Protein sequence and site context
+strongly constrain the structural class of glycosylation (Tasks~1--5;
+F1 = 0.924 for site classification, H@5 = 0.786 for structural cluster). The
+biological basis is glycosyltransferase substrate
+specificity~\cite{schjoldager2020,narimatsu2019}.
+
+\textbf{Layer~2: Environment-determined.} Within a structural class, exact
+glycan identity depends on cellular factors: enzyme expression, nucleotide sugar
+availability, Golgi transit time and competing biosynthetic
+pathways~\cite{stanley2022,varki2022essentials}. This corresponds to Task~6,
+where performance drops sharply (MRR = 0.066--0.118). Our cell-type analysis
+shows that current annotations are too sparse to bridge this gap computationally
+(39\% glycan coverage, concentrated in one cluster).
+
+The boundary is not a limitation of the models used: the 10-fold gap persists
+across model architectures (site-level versus protein-level retrieval) and
+feature representations (ESM-2 MLP versus embedding-based retrieval), suggesting
+it reflects an intrinsic property of glycosylation biology
+(Fig.~\ref{fig:twolayer}c).
+
+% ══════════════════════════════════════════════════════════════════
+\section{Discussion}
+
+Our hierarchical benchmark provides the first systematic quantification of what
+protein sequence can and cannot predict about glycosylation. The high accuracy of
+structural-class prediction (H@5 = 0.786 for $K = 20$ clusters) is consistent
+with the known specificity of glycosyltransferases for particular acceptor
+sequences~\cite{schjoldager2020} and suggests that sequence-based tools can
+reliably predict \textit{what type} of glycan modification occurs at a given
+site. This level of prediction is sufficient for many applications in structural
+biology, molecular dynamics simulation and rational protein engineering.
+
+The sharp drop to MRR = 0.066--0.118 for exact glycan identification means that
+predicting the precise glycan structure requires information beyond the protein
+sequence. Our systematic investigation of candidate information
+sources---single-cell enzyme expression, tissue expression profiles, reaction
+networks and composition---found that none currently bridges this gap.
+
+The failure of enzyme expression is particularly informative. The Tabula Sapiens
+atlas provides the most detailed available view of cell-type-specific enzyme
+expression, yet it adds no predictive signal. This is not because the biological
+hypothesis is wrong---glycan biosynthesis is indeed determined by enzyme
+expression---but because the enzyme--glycan annotation mapping is critically
+incomplete. Only 929 of 2,357 N-linked glycans (39.4\%) have any enzyme link in
+current databases, concentrated in a single structural cluster. This annotation
+gap, rather than model capacity, is the primary bottleneck.
+
+The O-linked prediction result (MRR = 0.847) provides important context. The
+high accuracy for O-linked glycans---which have a smaller candidate
+space---suggests that the N-linked challenge is largely one of candidate-space
+size and glycan diversity rather than inherent unpredictability.
+
+\textbf{Comparison with prior work.} Our work is most directly comparable to
+InSaNNE~\cite{kellman2024}, which predicts glycan structures from protein
+sequence features using a recurrent neural network. InSaNNE achieves AUC = 0.92
+on binary presence/absence classification across 199 glycans and 57 glycosites.
+Our approach differs in three ways: (i)~we evaluate retrieval ranking (MRR) over
+2,357 glycans rather than binary classification over 199, reflecting the full
+scale of the problem; (ii)~we decompose the problem into a hierarchy of six
+tasks, revealing where prediction succeeds and fails; and (iii)~we systematically
+investigate cellular context as an additional information source. The
+determination boundary we identify---reliable structural-class prediction but
+poor exact-ID prediction---is consistent with Glycoimpact's `bounded
+biosynthesis' framework~\cite{glycoimpact2024}, which showed that protein
+sequence constrains but does not determine the glycan.
+
+Yadav \textit{et al.}~\cite{yadav2022} modelled Golgi glycan processing as an
+optimal information-coding channel, predicting that structural diversity is
+bounded by enzyme kinetics and compartmental organisation. Our empirical
+determination boundary provides quantitative support for this theoretical
+framework: the 10-fold gap between cluster-level and exact-ID prediction is
+consistent with the information-theoretic limit imposed by the number of
+distinguishable enzymatic states in the Golgi.
+
+Chrysinas \textit{et al.}~\cite{chrysinas2024} used the same Tabula Sapiens
+atlas to analyse glycosylation enzyme expression, finding that terminal
+processing enzymes (e.g.\ sialyltransferases, fucosyltransferases) are highly
+cell-type-specific while core pathway enzymes (e.g.\ MGAT1, MGAT2) are
+ubiquitously expressed. Their qualitative observation aligns with our
+quantitative finding that enzyme expression adds no predictive signal: the
+cell-type-variable enzymes are precisely those with the sparsest glycan
+annotations (39\% coverage), preventing their discriminative use.
+
+SweetNet~\cite{burkholz2022}, GIFFLAR~\cite{thomes2024} and
+GlycanML~\cite{glyml2024} predict glycan properties from structures (the forward
+direction) but do not address the inverse problem. CoNglyPred~\cite{congly2025}
+predicts N-linked glycosylation sites using ESM-2 and AlphaFold2 features,
+complementing our Task~1 (F1 = 0.924) but not addressing glycan identity. The
+glycoMusubi resource integrates data from six databases that prior approaches used
+individually, enabling multi-hop queries that no single-database approach
+supports.
+
+\textbf{Limitations.} The benchmark is based on GlyConnect's (v2.0, accessed
+March 2025) site-specific glycan assignments, which are biased toward
+well-studied proteins (Gini coefficient of the protein distribution = 0.72;
+the top 5\% of proteins contribute 38\% of test samples). ESM-2 per-residue embeddings are available for only 1,611
+of 9,138 proteins (17.6\%) in the KG, restricted to those with confirmed
+glycosylation sites in GlyConnect; all benchmark proteins have embeddings, but
+the KG embedding model's protein coverage is limited. The structural clustering
+depends on KG-derived glycan embeddings. The cell-type analysis assumes that
+enzyme expression at the RNA level reflects enzymatic activity---a simplification
+given that post-translational regulation of glycosyltransferases is known to
+occur~\cite{schjoldager2020}. The current KG does not include mass spectrometry
+glycan identification data.
+
+\textbf{Future directions.} Closing the determination gap requires parallel
+efforts in data and methods. Systematic characterisation of enzyme--glycan
+biosynthetic relationships---particularly for complex-type N-linked
+glycans---would directly increase coverage. Integrating spatial glycomics and
+mass-spectrometry-based glycan identification could substantially improve
+prediction at the exact-glycan level. The hierarchical benchmark provides a
+standardised evaluation framework for measuring progress.
+
+% ══════════════════════════════════════════════════════════════════
+\section*{Data availability}
+
+glycoMusubi integrates publicly available data from GlyGen
+(\url{https://data.glygen.org}), GlyTouCan (\url{https://glytoucan.org}),
+UniProt (\url{https://www.uniprot.org}), ChEMBL
+(\url{https://www.ebi.ac.uk/chembl}), PTMCode (\url{https://ptmcode.embl.de})
+and GlyConnect (\url{https://glyconnect.expasy.org}). The constructed knowledge graph, trained embeddings and benchmark results are
+available as a reviewer-accessible pre-release on Zenodo
+(DOI:~10.5281/zenodo.XXXXXXX; full public release upon acceptance).
+
+\section*{Funding}
+
+This work was supported by JSPS KAKENHI (Grant Number JP24K02954) and the
+Institute for Glyco-core Research (iGCORE), Nagoya University.
+
+% ══════════════════════════════════════════════════════════════════
+% Figures
+% ══════════════════════════════════════════════════════════════════
+
+\input{fig1_tikz}
+
+\input{fig2_tikz}
+
+% ══════════════════════════════════════════════════════════════════
+% References
+% ══════════════════════════════════════════════════════════════════
+
+\begin{thebibliography}{27}
+
+\bibitem{varki2017}
+Varki,A. (2017) Biological roles of glycans. \textit{Glycobiology}, \textbf{27}, 3--49.
+
+\bibitem{reily2019}
+Reily,C. \textit{et al.} (2019) Glycosylation in health and disease. \textit{Nat. Rev. Nephrol.}, \textbf{15}, 346--366.
+
+\bibitem{schjoldager2020}
+Schjoldager,K.T. \textit{et al.} (2020) Global view of human protein glycosylation pathways and functions. \textit{Nat. Rev. Mol. Cell Biol.}, \textbf{21}, 729--749.
+
+\bibitem{narimatsu2019}
+Narimatsu,Y. \textit{et al.} (2019) An atlas of human glycosylation pathways enables display of the human glycome by gene engineering. \textit{Mol. Cell}, \textbf{75}, 394--407.
+
+\bibitem{stanley2022}
+Stanley,P. \textit{et al.} (2022) N-Glycans. In: Varki,A. \textit{et al.} (eds) \textit{Essentials of Glycobiology}, 4th edn, Ch.~9. Cold Spring Harbor Laboratory Press.
+
+\bibitem{varki2022essentials}
+Varki,A. \textit{et al.} (2022) \textit{Essentials of Glycobiology}, 4th edn. Cold Spring Harbor Laboratory Press.
+
+\bibitem{tiemeyer2017}
+Tiemeyer,M. \textit{et al.} (2017) GlyTouCan: an accessible glycan structure repository. \textit{Glycobiology}, \textbf{27}, 915--919.
+
+\bibitem{uniprot2023}
+The UniProt Consortium (2023) UniProt: the Universal Protein Knowledgebase in 2023. \textit{Nucleic Acids Res.}, \textbf{51}, D523--D531.
+
+\bibitem{york2020}
+York,W.S. \textit{et al.} (2020) GlyGen: computational and informatics resources for glycoscience. \textit{Glycobiology}, \textbf{30}, 72--73.
+
+\bibitem{zdrazil2024}
+Zdrazil,B. \textit{et al.} (2024) The ChEMBL Database in 2023. \textit{Nucleic Acids Res.}, \textbf{52}, D1180--D1192.
+
+\bibitem{alocci2019}
+Alocci,D. \textit{et al.} (2019) GlyConnect: glycoproteomics goes visual, interactive, and analytical. \textit{J. Proteome Res.}, \textbf{18}, 698--708.
+
+\bibitem{burkholz2022}
+Burkholz,R. \textit{et al.} (2022) SweetNet: a neural network for predicting glycan properties from graph representation. \textit{Bioinformatics}, \textbf{38}, 4599--4605.
+
+\bibitem{thomes2024}
+Thom\`es,L. and Burkholz,R. (2024) GIFFLAR: a higher-order graph neural network for glycan function prediction. \textit{Preprint at bioRxiv}.
+
+\bibitem{thomes2021}
+Thom\`es,L. \textit{et al.} (2021) glycowork: a Python package for glycan data science and machine learning. \textit{Glycobiology}, \textbf{31}, 1240--1244.
+
+\bibitem{lin2023}
+Lin,Z. \textit{et al.} (2023) Evolutionary-scale prediction of atomic-level protein structure with a language model. \textit{Science}, \textbf{379}, 1123--1130.
+
+\bibitem{bordes2013}
+Bordes,A. \textit{et al.} (2013) Translating embeddings for modeling multi-relational data. \textit{Adv. Neural Inf. Process. Syst.}, \textbf{26}.
+
+\bibitem{tabulasapiens2022}
+The Tabula Sapiens Consortium (2022) The Tabula Sapiens: a multiple-organ, single-cell transcriptomic atlas of humans. \textit{Science}, \textbf{376}, eabl4896.
+
+\bibitem{uhlen2015}
+Uhl\'en,M. \textit{et al.} (2015) Tissue-based map of the human proteome. \textit{Science}, \textbf{347}, 1260419.
+
+\bibitem{minguez2015}
+Minguez,P. \textit{et al.} (2015) PTMcode v2: a resource for functional associations of post-translational modifications within and between proteins. \textit{Nucleic Acids Res.}, \textbf{43}, D503--D509.
+
+\bibitem{kellman2024}
+Kellman,B.P. \textit{et al.} (2024) Elucidating Human Protein Glycosylation using an Informed Search of Artificial Neural Network Ensembles (InSaNNE). \textit{Preprint at bioRxiv}, doi:10.1101/2024.02.02.578654.
+
+\bibitem{bojar2022}
+Bojar,D. and Lisacek,F. (2022) Glycoinformatics in the Artificial Intelligence Era. \textit{Chem.\ Rev.}, \textbf{122}, 15971--15988.
+
+\bibitem{congly2025}
+Li,M. \textit{et al.} (2025) CoNglyPred: accurate prediction of protein N-linked glycosylation sites combining ESM-2 and AlphaFold2 features. \textit{PROTEOMICS}, \textbf{25}, e2400129.
+
+\bibitem{glyml2024}
+Bojar,D. \textit{et al.} (2024) GlycanML: A Multi-Task and Multi-Structure Benchmark for Glycan Machine Learning. \textit{Preprint at arXiv}, arXiv:2405.16206.
+
+\bibitem{yadav2022}
+Yadav,V. \textit{et al.} (2022) Golgi glycan processing as an optimal information coding channel. \textit{eLife}, \textbf{11}, e76505.
+
+\bibitem{chrysinas2024}
+Chrysinas,P. \textit{et al.} (2024) Single cell analysis of human glycosyltransferases and glycosidases. \textit{NAR Genomics Bioinformatics}, \textbf{6}, lqae069.
+
+\bibitem{glycoimpact2024}
+Lundstr\"om,J. \textit{et al.} (2024) GlycoImpact: In-silico glycan scoring by amino acid substitution matrix. \textit{Preprint at bioRxiv}, doi:10.1101/2024.09.16.613237.
+
+\end{thebibliography}
+
+\end{document}

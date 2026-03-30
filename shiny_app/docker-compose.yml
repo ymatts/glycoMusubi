@@ -1,0 +1,15 @@
+services:
+  glycoMusubi-shiny:
+    build: .
+    ports:
+      - "3838:3838"
+    volumes:
+      # Mount KG data and experiments read-only
+      - ../kg:/srv/shiny-server/glycoMusubi/kg_data:ro
+      - ../data_clean:/srv/shiny-server/glycoMusubi/clean_data:ro
+      - ../experiments_v2:/srv/shiny-server/glycoMusubi/exp_data:ro
+    environment:
+      - GLYCOKG_KG_DIR=/srv/shiny-server/glycoMusubi/kg_data
+      - GLYCOKG_DATA_DIR=/srv/shiny-server/glycoMusubi/clean_data
+      - GLYCOKG_EXP_DIR=/srv/shiny-server/glycoMusubi/exp_data
+    restart: unless-stopped

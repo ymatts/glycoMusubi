@@ -1,0 +1,74 @@
+# Glycobiology Primer {#glycobiology-primer}
+
+This chapter provides the biological foundation needed to understand glycoMusubi. Readers already familiar with glycobiology may skip ahead to Chapter \@ref(knowledge-graphs), but the terminology introduced here is used throughout the remaining chapters.
+
+## What Are Glycans?
+
+Glycans --- also called complex carbohydrates or oligosaccharides --- are sugar chains covalently attached to proteins, lipids, or other organic molecules. They are assembled from a small alphabet of monosaccharide building blocks, the most common in mammals being glucose (Glc), galactose (Gal), mannose (Man), fucose (Fuc), N-acetylglucosamine (GlcNAc), N-acetylgalactosamine (GalNAc), and sialic acid (Neu5Ac). Despite being constructed from this limited set of monomers, glycans exhibit extraordinary structural diversity because of the many possible linkage positions, anomeric configurations, and branching patterns available to each sugar unit.
+
+Unlike DNA and proteins, glycans are **not template-encoded**. No single gene specifies the complete structure of a glycan. Instead, glycan structures emerge from the combined activities of dozens of glycosyltransferases and glycosidases acting in the secretory pathway. This fundamental difference from genomics and proteomics means that glycan structures cannot be predicted from a linear code, and it is precisely this complexity that motivates a knowledge graph approach to capturing the relationships involved.
+
+Glycans participate in nearly every extracellular biological process. They mediate cell--cell recognition through selectin--glycan interactions that govern leukocyte homing during immune responses. They serve as entry points for pathogens, as exemplified by influenza haemagglutinin binding to sialylated glycans on host cells. Within the endoplasmic reticulum, glycans play an essential role in protein folding quality control through the calnexin/calreticulin cycle. They also regulate serum protein half-life, since the asialoglycoprotein receptor clears desialylated glycoproteins from circulation. These diverse functions underscore why glycan biology has become central to both basic research and translational medicine.
+
+## N-Linked vs O-Linked Glycosylation
+
+The two dominant forms of protein glycosylation differ in their attachment chemistry, biosynthetic origin, and structural diversity, and understanding both is essential for interpreting glycoMusubi's data model.
+
+N-linked glycans are attached to the amide nitrogen of asparagine (Asn) within the consensus sequon Asn-X-Ser/Thr, where X is any amino acid except proline. The process begins in the endoplasmic reticulum with the en bloc transfer of a 14-sugar lipid-linked precursor (Glc$_3$Man$_9$GlcNAc$_2$) by oligosaccharyltransferase (OST). Importantly, the sequon is necessary but not sufficient for glycosylation --- only about two-thirds of sequons are actually occupied. All N-glycans share a common pentasaccharide core (Man$_3$GlcNAc$_2$), and it is in the Golgi apparatus that structural diversity arises through subsequent trimming and elongation reactions.
+
+In contrast to this relatively ordered initiation, O-linked glycans are attached to the hydroxyl oxygen of serine or threonine residues without a strict consensus sequon, making computational prediction far more difficult. The most common type, mucin-type O-glycosylation, is initiated in the Golgi by a family of at least 20 polypeptide GalNAc-transferases (ppGalNAcTs) with partially overlapping specificities. These enzymes add a single GalNAc to form the Tn antigen, which is then elaborated into one of eight defined core structures (Core 1 through Core 8). The lack of a predictable sequon and the large number of initiating enzymes make O-glycosylation particularly challenging to study computationally.
+
+In glycoMusubi, glycosylation sites are represented as `site` nodes with identifiers of the form `SITE::UniProtID_Position_Type` (e.g., `SITE::P02768_184_N-linked`), capturing both the protein context and the glycosylation class in a single entity.
+
+## Glycan Structural Hierarchy
+
+Glycan structures are organised at multiple levels of complexity, from individual monosaccharides up to fully elaborated antennary architectures. At the base level sit the monosaccharide residues themselves. These assemble into core structures --- the pentasaccharide core for N-glycans or Cores 1 through 8 for O-glycans. Atop the core, antennary branching creates bi-, tri-, or tetra-antennary frameworks. Finally, terminal modifications such as sialylation, fucosylation, and sulfation cap the branches, yielding the complete glycan structure that is registered in GlyTouCan with a unique accession identifier.
+
+In glycoMusubi, the `glycan` node type covers all of these levels. Structural relationships are captured by `substructure_of` edges, which encode the glycan containment hierarchy and account for approximately 90% of all edges in the graph. This dominance of substructure edges reflects the combinatorial richness of glycan architecture: each complex glycan contains many substructures, and each substructure appears within many different glycans.
+
+## Glycan Type Classification
+
+The four major classes of N-linked glycans are distinguished by their branching patterns and terminal sugars. The following table summarises their key features.
+
+| Type | Branching | Terminal sugars | Typical location | Example |
+|:-----|:----------|:----------------|:-----------------|:--------|
+| **High-mannose** | 2 antennae (Man only) | Mannose | ER-resident proteins, early secretory pathway | Man$_5$--Man$_9$GlcNAc$_2$ |
+| **Complex** | 2--5 antennae | Gal, GlcNAc, Neu5Ac, Fuc | Serum glycoproteins, cell-surface receptors | Biantennary with core fucose |
+| **Hybrid** | 1 Man antenna + 1 complex antenna | Mixed | Lysosomal enzymes (Man-6-P tag) | Man$_5$GlcNAc$_3$ |
+| **Paucimannose** | Trimmed to 1--3 Man residues | Mannose +/- Fuc | Insects, nematodes, some human neutrophils | Man$_3$GlcNAc$_2$Fuc |
+
+Table: Major N-linked glycan classes. glycoMusubi captures these distinctions through `motif` nodes and `has_motif` edges linking glycans to their structural motifs.
+
+High-mannose glycans are the simplest, bearing only mannose residues on their antennae, and are characteristic of proteins that have not yet completed Golgi processing. Complex glycans, by contrast, display the full repertoire of terminal sugars and are the most functionally diverse class, found on serum glycoproteins and cell-surface receptors. Hybrid glycans combine features of both, retaining a mannose-only antenna alongside a processed complex antenna. Paucimannose glycans, which are trimmed down to very few mannose residues, are uncommon in humans but prevalent in insects and nematodes.
+
+## Biosynthetic Pathway Overview
+
+Glycan biosynthesis follows a spatial programme through the secretory pathway, and understanding this programme is essential because the physical arrangement of enzymes in the ER and Golgi directly determines the glycan structures that can be produced.
+
+The process begins in the ER, where the dolichol-linked precursor (Glc$_3$Man$_9$GlcNAc$_2$) is assembled on the cytoplasmic and then luminal face of the ER membrane. After transfer to the nascent protein by OST, glucosidases I and II remove the three glucose residues, and ER mannosidase I removes one mannose. This trimming step is tightly coupled to the protein folding quality control machinery.
+
+As glycoproteins transit through the cis-, medial-, and trans-Golgi cisternae, they encounter a succession of processing enzymes arranged in a spatial gradient. In the cis-Golgi, mannosidase I trims the structure down to Man$_5$GlcNAc$_2$. Moving to the medial-Golgi, GlcNAc-transferase I (MGAT1) adds the first GlcNAc branch, after which mannosidase II removes two further mannose residues. Still in the medial-Golgi, GlcNAc-transferase II (MGAT2) adds the second branch, creating the biantennary complex glycan scaffold. Finally, in the trans-Golgi, galactosyltransferases, sialyltransferases, and fucosyltransferases add terminal sugars that confer much of the glycan's biological specificity.
+
+Building on this core pathway, terminal modifications --- sialylation, fucosylation, sulfation, and acetylation --- are the primary source of structural diversity and carry major functional consequences. For example, alpha-2,6-sialylation of IgG Fc glycans is anti-inflammatory, while its absence shifts the antibody toward a pro-inflammatory profile. In glycoMusubi, the enzymes at each biosynthetic step are represented as `enzyme` nodes connected to `reaction` nodes via `catalyzes` edges, and to their subcellular compartments via `located_in` edges to `cellular_location` nodes.
+
+## The Glycosylation Determination Problem
+
+A central and still-unsolved question in glycobiology is: what determines which glycan structure is attached at a given site on a given protein? This is sometimes called the "glycosylation code" problem, and it involves an intricate interplay of intrinsic and extrinsic factors.
+
+On the intrinsic side, glycosyltransferase substrate specificity dictates which acceptor structures and linkages each enzyme can recognise. The local protein sequence context surrounding the glycosylation sequon influences OST efficiency and downstream processing, while the three-dimensional structure of the protein determines steric accessibility of the site to processing enzymes.
+
+On the extrinsic side, cell-type-specific transcriptional programmes control which glycosyltransferases are expressed and at what levels. Metabolic flux through the hexosamine, sialic acid, and fucose biosynthetic pathways governs sugar nucleotide donor availability. The rate at which glycoproteins transit through the Golgi determines how much processing they undergo, and Golgi pH and ion concentrations modulate enzyme activity.
+
+This interplay between sequence-determined and environment-determined factors is precisely why a knowledge graph approach is valuable. glycoMusubi links glycan structures to their biosynthetic enzymes, protein contexts, and disease associations, enabling multi-hop queries that span these diverse determinants.
+
+## Translational Relevance
+
+Glycobiology has direct translational relevance across several domains of biomedicine. In drug development, most biologic drugs --- monoclonal antibodies, fusion proteins, and replacement enzymes --- are glycoproteins whose glycan structures affect efficacy, half-life, and immunogenicity. The FDA requires detailed glycan characterisation for biosimilar approval, making glycan analysis a regulatory necessity.
+
+In the realm of disease biomarkers, altered glycosylation is a hallmark of cancer (for instance, increased branching via MGAT5 and the display of sialyl-Lewis X on metastatic cells), congenital disorders of glycosylation (CDG), and inflammatory diseases. These glycan alterations offer diagnostic and prognostic opportunities that are only beginning to be exploited.
+
+Protein engineering has also embraced glycobiology: glycoengineering of therapeutic proteins --- such as afucosylation of antibodies to enhance antibody-dependent cellular cytotoxicity (ADCC) --- is now standard practice in biopharma. Similarly, in vaccine design, understanding the dense glycan shields that decorate viral surface glycoproteins (HIV gp120, SARS-CoV-2 spike) is critical for designing effective immunogens that can elicit broadly neutralising antibodies.
+
+## Summary
+
+Glycans are structurally complex, non-template-encoded biomolecules whose structures are determined by a network of biosynthetic enzymes, metabolic conditions, and protein context. This inherent complexity, combined with the need to integrate multiple heterogeneous data sources, motivates the knowledge graph approach described in the following chapters. In the next chapter, we introduce knowledge graphs and the computational techniques used to reason over them.

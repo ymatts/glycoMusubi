@@ -1,0 +1,57 @@
+# Round 3: CMCA Contrastive Pre-training + Fine-tuning (Inductive)
+# Phase 1: CMCALoss pre-training to align feature and KG spaces
+# Phase 2: Link prediction fine-tuning
+# glycan_encoder: hybrid
+# protein_encoder: esm2
+# Target: Inductive MRR > 0.5 on protein::has_glycan
+name: glycokgnet_inductive_r3
+seed: 42
+embedding_dim: 256
+
+model:
+  name: GlycoKGNet
+  embedding_dim: 256
+  glycan_encoder_type: hybrid
+  protein_encoder_type: esm2
+  esm2_cache_path: data_clean/esm2_cache
+  num_hgt_layers: 0
+  num_hgt_heads: 8
+  use_bio_prior: false
+  use_cross_modal_fusion: true
+  num_fusion_heads: 4
+  decoder_type: hybrid
+  dropout: 0.1
+  loss_fn: bce
+  adversarial_temperature: 1.0
+  label_smoothing: 0.1
+  inductive: true
+  # CompositeLoss for contrastive + structural alignment
+  lambda_struct: 0.3
+  lambda_hyp: 0.01
+  lambda_reg: 0.01
+
+data:
+  holdout_ratio: 0.15
+  inductive_min_degree: 2
+
+training:
+  epochs: 600
+  batch_size: 1024
+  lr: 5.0e-4
+  weight_decay: 1.0e-4
+  optimizer: adam
+  scheduler: cosine
+  grad_clip: 1.0
+  early_stopping_patience: 50
+  eval_every: 10
+  relation_balance_alpha: 0.5
+  relation_balance_max_weight: 5.0
+  max_edges_per_type: 150000
+  num_negatives: 64
+
+tags:
+  - glycokgnet
+  - inductive
+  - round3
+  - cmca_pretrain
+  - high_negatives

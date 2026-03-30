@@ -1,0 +1,143 @@
+# Cell-type Enzyme Expression Analysis {#celltype-analysis}
+
+The previous chapter established that glycan prediction accuracy plateaus sharply at the structural-class level, with exact glycan identification remaining an open problem. A natural hypothesis is that cell-type-specific enzyme expression provides the missing signal: if we know which glycosyltransferases a cell expresses, we can in principle narrow the set of glycans it can produce. This chapter investigates that hypothesis by integrating single-cell transcriptomics from the Tabula Sapiens atlas with glycoMusubi enzyme-glycan annotations. The results are sobering -- current annotation coverage is too sparse for enzyme expression to improve predictions -- but they define a concrete data generation agenda for the field.
+
+## Data sources and integration strategy
+
+The analysis draws on the Tabula Sapiens atlas, which provides mean log-normalised expression counts for 748 cell types across 24 organs. From this atlas we extract expression profiles for 339 glycosylation enzyme genes, creating a cell-type-by-enzyme expression matrix that captures the enzymatic context of glycan biosynthesis across the human body.
+
+```{r enzyme-glycan-summary, eval=FALSE}
+library(arrow)
+library(dplyr)
+
+edges <- read_parquet("../../kg/edges.parquet")
+enzyme_glycan <- edges %>%
+  filter(relation == "catalyzes") %>%
+  distinct(source, target)
+cat("Enzyme-glycan pairs:", nrow(enzyme_glycan), "\n")
+cat("Unique enzymes:", n_distinct(enzyme_glycan$source), "\n")
+cat("Unique glycans:", n_distinct(enzyme_glycan$target), "\n")
+```
+
+The glycoMusubi enzyme-glycan edges, derived from the "catalyzes" relation, provide the bridge between expression data and glycan predictions. By joining these two data sources, we can compute, for any given cell type, a score reflecting how well-equipped that cell is to produce each glycan in the vocabulary.
+
+## Cascade prediction model
+
+The prediction model decomposes glycan assignment into two stages. Given a protein $p$, a site $s$, and a cell type $c$, the probability of observing glycan $g$ is factored as:
+
+$$
+P(g \mid p, s, c) = P(k \mid p, s) \times P(g \mid k, c)
+$$
+
+where $k$ is a glycan structural cluster predicted from protein and site features alone (as in the benchmark hierarchy), and the cell-type-dependent term $P(g \mid k, c)$ is informed by enzyme expression. The enzyme-based score for a glycan in a given cell type is simply the sum of expression values for all enzymes annotated to that glycan:
+
+$$
+s(g, c) = \sum_{e \in \text{enzymes}(g)} \text{expr}(e, c)
+$$
+
+This formulation has the appealing property that glycans requiring many highly-expressed enzymes receive high scores, while glycans depending on enzymes absent from the cell type are penalised.
+
+```{r enzyme-score, eval=FALSE}
+library(arrow)
+library(dplyr)
+library(tidyr)
+
+expr_matrix <- read_parquet("../../data_clean/tabula_sapiens_enzyme_expr.parquet")
+enzyme_glycan_map <- read_parquet("../../kg/edges.parquet") %>%
+  filter(relation == "catalyzes") %>%
+  select(enzyme = source, glycan = target)
+
+glycan_scores <- expr_matrix %>%
+  pivot_longer(-cell_type, names_to = "enzyme", values_to = "expr") %>%
+  inner_join(enzyme_glycan_map, by = "enzyme") %>%
+  group_by(cell_type, glycan) %>%
+  summarise(score = sum(expr, na.rm = TRUE), .groups = "drop")
+```
+
+## Evaluation design
+
+We evaluated four prediction modes to isolate the contribution of enzyme expression. The marginal mode ranks glycans solely by the enzyme score $s(g,c)$, using expression data but no training examples. The oracle mode uses true cell-type glycan frequencies from the training data, providing an upper bound on what cell-type information could achieve. The popularity baseline ranks glycans by their global observed frequency, ignoring cell type entirely. Finally, the blend mode combines the enzyme score with popularity using a mixing weight $\alpha$, where higher $\alpha$ places more weight on expression.
+
+```{r blend-search, eval=FALSE}
+alpha_grid <- seq(0, 1, by = 0.05)
+mrr_results <- sapply(alpha_grid, function(a) {
+  blended <- a * glycan_scores$score + (1 - a) * glycan_scores$popularity
+  compute_mrr(blended, glycan_scores$true_rank)
+})
+cat("Optimal alpha:", alpha_grid[which.max(mrr_results)], "\n")
+```
+
+## Key results
+
+The results are unambiguous. The marginal enzyme-expression mode achieves an MRR of only 0.035 and Hits@10 of 0.08, performing worse than the popularity baseline (MRR 0.041, Hits@10 0.09). More tellingly, the optimal blend weight $\alpha$ is exactly 0.0, meaning the model achieves its best performance by completely ignoring enzyme expression and relying solely on global glycan popularity. Even the oracle mode, which has access to true cell-type glycan frequencies from training data, achieves only an MRR of 0.026 -- worse than the popularity baseline.
+
+| Metric | Marginal | Oracle | Popularity | Blend (optimal) |
+|:-------|:---------|:-------|:-----------|:----------------|
+| MRR | 0.035 | 0.026 | 0.041 | 0.041 |
+| Hits@10 | 0.08 | 0.06 | 0.09 | 0.09 |
+| Optimal $\alpha$ | --- | --- | --- | 0.0 |
+
+These findings do not mean that cell-type information is irrelevant to glycosylation -- biological intuition and experimental evidence strongly suggest otherwise. Rather, the failure lies in the annotation layer that connects enzymes to their glycan products.
+
+## Root cause: annotation sparsity
+
+Enzyme-glycan annotations in the current knowledge graph cover only 39 percent of N-linked glycans in the benchmark set. At the cluster level, only one of 20 structural clusters -- high-mannose, at 83.3 percent coverage -- has sufficient annotation density for meaningful cell-type-based rankings. The remaining clusters are severely under-annotated: complex bi-antennary glycans have 23.4 percent coverage, complex tri-antennary only 9.0 percent, and 15 of the 20 clusters have zero enzyme-glycan annotations altogether.
+
+| Cluster | N glycans | With enzyme data | Coverage (%) |
+|:--------|:----------|:-----------------|:-------------|
+| High-mannose | 12 | 10 | 83.3 |
+| Complex bi-antennary | 145 | 34 | 23.4 |
+| Complex tri-antennary | 89 | 8 | 9.0 |
+| Complex tetra-antennary | 43 | 2 | 4.7 |
+| Hybrid | 67 | 5 | 7.5 |
+| Other (15 clusters) | 412 | 0 | 0.0 |
+
+This sparsity means the enzyme-based score $s(g, c)$ is undefined or zero for most glycans, collapsing its discriminative power.
+
+## Core vs terminal enzyme asymmetry
+
+The root cause of annotation sparsity is a fundamental asymmetry in how glycosylation enzymes are characterised. Core pathway enzymes such as MGAT1, MGAT2, and MAN1A1 are well-studied and annotated to 87 percent of glycans in the knowledge graph, but they are ubiquitously expressed across cell types (expression CV of 0.15), making them uninformative for cell-type discrimination. In contrast, terminal modification enzymes -- the sialyltransferases (ST3GAL family), fucosyltransferases (FUT family), and sulfotransferases (CHST family) -- show high cell-type specificity (expression CVs of 0.55 to 0.61) but are annotated to only 3 to 12 percent of glycans.
+
+| Category | Example Genes | Glycan Coverage | Expression CV |
+|:---------|:--------------|:----------------|:--------------|
+| Core pathway | MGAT1, MGAT2, MAN1A1 | 87% | 0.15 |
+| Branching | MGAT4, MGAT5 | 31% | 0.42 |
+| Galactosylation | B4GALT1--4 | 28% | 0.38 |
+| Sialylation | ST3GAL1--6, ST6GAL1--2 | 12% | 0.61 |
+| Fucosylation | FUT1--11 | 9% | 0.58 |
+| Sulfation | CHST1--7 | 3% | 0.55 |
+
+This creates an ironic situation: the enzymes with the greatest potential to discriminate between cell types are precisely those with the least annotation coverage in existing databases. The information that would make cell-type context useful for prediction is the information we lack.
+
+```{r coverage-heatmap, eval=FALSE, fig.cap="Coverage across glycan clusters and enzyme categories. White cells indicate missing annotations."}
+library(ComplexHeatmap)
+library(circlize)
+
+coverage_mat <- matrix(
+  c(1.0, 0.8, 0.7, 0.5, 0.3, 0.1,
+    0.9, 0.3, 0.2, 0.1, 0.05, 0,
+    0.8, 0.1, 0.05, 0, 0, 0,
+    0.7, 0.05, 0, 0, 0, 0),
+  nrow = 4, byrow = TRUE,
+  dimnames = list(
+    c("High-mannose", "Complex-bi", "Complex-tri", "Hybrid"),
+    c("Core", "Branching", "Galactosyl.", "Sialyl.", "Fucosyl.", "Sulfation")
+  )
+)
+Heatmap(coverage_mat, name = "Coverage",
+        col = colorRamp2(c(0, 0.5, 1), c("white", "steelblue", "navy")),
+        cluster_rows = FALSE, cluster_columns = FALSE,
+        cell_fun = function(j, i, x, y, w, h, fill) {
+          grid.text(sprintf("%.0f%%", coverage_mat[i, j] * 100), x, y)
+        })
+```
+
+## Implications for closing the gap
+
+The conclusion is clear: the annotation layer, not the expression layer, is the limiting factor for cell-type-aware glycan prediction. The glycobiology community needs expanded enzyme-glycan reaction databases that cover terminal modification enzymes and their glycan products, pathway-aware mappings that capture the sequential nature of glycan biosynthesis rather than just enzyme-product associations, quantitative kinetic parameters ($K_m$, $V_{max}$) for glycosyltransferases on specific acceptor substrates, and cell-type-resolved glycoproteomics providing ground truth for model training.
+
+Until these data gaps are filled, cell-type enzyme expression will remain an untapped resource for glycan prediction. The analysis presented here provides a quantitative framework for measuring progress: as annotation coverage for terminal enzymes increases, the optimal blend weight $\alpha$ should rise above zero, signalling that expression data has become informative.
+
+## Summary
+
+Cell-type enzyme expression does not currently improve glycan prediction, with the optimal blend weight $\alpha$ falling to 0.0. The root cause is annotation sparsity concentrated in an unfortunate pattern: ubiquitous core pathway enzymes are well-annotated but uninformative, while cell-type-specific terminal processing enzymes are informative but poorly annotated. This analysis defines a concrete data generation agenda and provides a quantitative benchmark against which future annotation efforts can be measured.

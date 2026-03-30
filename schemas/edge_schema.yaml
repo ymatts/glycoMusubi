@@ -1,0 +1,232 @@
+schema_version: "1.0"
+description: "Edge schema definition for glycoMusubi knowledge graph"
+
+columns:
+  source_id:
+    type: string
+    nullable: false
+    description: "Source node identifier"
+    
+  target_id:
+    type: string
+    nullable: false
+    description: "Target node identifier"
+    
+  relation:
+    type: string
+    nullable: false
+    description: "Type of relationship between nodes"
+    enum:
+      - inhibits
+      - has_glycan
+      - associated_with_disease
+      - has_variant
+      - has_site
+      - ptm_crosstalk
+      - parent_of
+      - child_of
+      - subsumes
+      - subsumed_by
+      - has_product
+      - produced_by
+      - has_motif
+      - catalyzed_by
+      - glycosylated_at
+      - localized_in
+
+  metadata:
+    type: string
+    nullable: true
+    description: "JSON-encoded metadata object"
+
+edge_types:
+  inhibits:
+    description: "Chemical compound inhibits enzyme activity"
+    source_type: compound
+    target_type: enzyme
+    required_metadata: []
+    optional_metadata:
+      - type
+      - value
+      - units
+      - source
+    ontology_uri: "http://purl.obolibrary.org/obo/RO_0002449"
+    inverse: inhibited_by
+    
+  has_glycan:
+    description: "Protein has glycan modification"
+    source_type:
+      - protein
+      - enzyme
+    target_type: glycan
+    required_metadata: []
+    optional_metadata:
+      - source
+      - site
+    ontology_uri: "http://purl.obolibrary.org/obo/RO_0002180"
+    inverse: glycosylates
+    
+  associated_with_disease:
+    description: "Protein is associated with disease condition"
+    source_type:
+      - protein
+      - enzyme
+    target_type: disease
+    required_metadata: []
+    optional_metadata:
+      - source
+      - evidence
+    ontology_uri: "http://purl.obolibrary.org/obo/RO_0002200"
+    inverse: has_associated_protein
+    
+  has_variant:
+    description: "Protein has genetic variant"
+    source_type: protein
+    target_type: variant
+    required_metadata: []
+    optional_metadata:
+      - source
+      - clinical_significance
+    ontology_uri: "http://purl.obolibrary.org/obo/SO_0001060"
+    inverse: variant_of
+    
+  has_site:
+    description: "Protein has PTM site"
+    source_type:
+      - protein
+      - enzyme
+    target_type: site
+    required_metadata: []
+    optional_metadata:
+      - source
+      - site_type
+      - ptm_type
+    ontology_uri: "http://purl.obolibrary.org/obo/RO_0002180"
+    inverse: site_of
+    
+  ptm_crosstalk:
+    description: "PTM crosstalk between two modification sites"
+    source_type: site
+    target_type: site
+    required_metadata: []
+    optional_metadata:
+      - source
+      - score
+      - site1_ptm_type
+      - site2_ptm_type
+    ontology_uri: null
+    inverse: ptm_crosstalk
+
+  parent_of:
+    description: "Glycan is the parent of another glycan in the subsumption hierarchy"
+    source_type: glycan
+    target_type: glycan
+    required_metadata: []
+    optional_metadata:
+      - source
+    inverse: child_of
+
+  child_of:
+    description: "Glycan is the child of another glycan in the subsumption hierarchy"
+    source_type: glycan
+    target_type: glycan
+    required_metadata: []
+    optional_metadata:
+      - source
+    inverse: parent_of
+
+  subsumes:
+    description: "Glycan structurally subsumes another glycan"
+    source_type: glycan
+    target_type: glycan
+    required_metadata: []
+    optional_metadata:
+      - source
+    inverse: subsumed_by
+
+  subsumed_by:
+    description: "Glycan is structurally subsumed by another glycan"
+    source_type: glycan
+    target_type: glycan
+    required_metadata: []
+    optional_metadata:
+      - source
+    inverse: subsumes
+
+  has_product:
+    description: "Reaction produces a glycan product"
+    source_type: reaction
+    target_type: glycan
+    required_metadata: []
+    optional_metadata:
+      - source
+
+  produced_by:
+    description: "Glycan is produced by an enzyme-catalyzed reaction"
+    source_type: glycan
+    target_type: enzyme
+    required_metadata: []
+    optional_metadata:
+      - source
+
+  has_motif:
+    description: "Glycan contains a structural motif"
+    source_type: glycan
+    target_type: motif
+    required_metadata: []
+    optional_metadata:
+      - source
+
+  catalyzed_by:
+    description: "Reaction is catalyzed by an enzyme"
+    source_type: reaction
+    target_type: enzyme
+    required_metadata: []
+    optional_metadata:
+      - source
+
+  glycosylated_at:
+    description: "Glycosylation site has associated glycan (type-matched)"
+    source_type: site
+    target_type: glycan
+    required_metadata: []
+    optional_metadata:
+      - source
+      - site_type
+    inverse: has_glycosylation_site
+
+  localized_in:
+    description: "Protein or enzyme is localized in a subcellular compartment"
+    source_type:
+      - protein
+      - enzyme
+    target_type: cellular_location
+    required_metadata: []
+    optional_metadata:
+      - source
+    ontology_uri: "http://purl.obolibrary.org/obo/RO_0001025"
+    inverse: has_localized_protein
+
+arrow_schema:
+  source_id:
+    arrow_type: "string"
+  target_id:
+    arrow_type: "string"
+  relation:
+    arrow_type: "string"
+  type:
+    arrow_type: "string"
+  value:
+    arrow_type: "float64"
+  units:
+    arrow_type: "string"
+  source:
+    arrow_type: "list<string>"
+
+expanded_columns:
+  - source_id
+  - target_id
+  - relation
+  - type
+  - value
+  - units

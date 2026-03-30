@@ -1,0 +1,15 @@
+# glycoMusubi Embedding Pipeline — base configuration
+seed: 42
+embedding_dim: 256
+device: auto  # auto | cuda | cpu
+output_dir: experiments
+log_level: INFO
+deterministic: true
+
+data:
+  kg_dir: kg
+  node_file: nodes.tsv
+  edge_file: edges.tsv
+  validation_ratio: 0.1
+  test_ratio: 0.1
+  num_neg_samples: 64

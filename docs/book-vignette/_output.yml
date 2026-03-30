@@ -1,0 +1,19 @@
+bookdown::gitbook:
+  css: style.css
+  config:
+    toc:
+      before: |
+        <li><a href="./">glycoMusubi: Vignettes & Technical Guide</a></li>
+      after: |
+        <li><a href="https://github.com/ymatts/glycoMusubi" target="_blank">GitHub</a></li>
+    download: ["pdf", "epub"]
+    sharing:
+      github: yes
+      twitter: no
+      facebook: no
+bookdown::pdf_book:
+  includes:
+    in_header: preamble.tex
+  latex_engine: xelatex
+  citation_package: natbib
+bookdown::epub_book: default

@@ -1,0 +1,55 @@
+# Round 1: Hybrid Glycan + ESM-2 Protein (Inductive)
+# glycan_encoder: hybrid (learnable + WURCS 24dim)
+# protein_encoder: esm2 (1280dim -> 256dim)
+# loss: BCE + self-adversarial (temp=1.0)
+# relation_balance_alpha: 0.5 (upweight has_glycan)
+# num_negatives: 32, type-constrained
+# Target: Inductive MRR > 0.2 on protein::has_glycan
+name: glycokgnet_inductive_r1
+seed: 42
+embedding_dim: 256
+
+model:
+  name: GlycoKGNet
+  embedding_dim: 256
+  glycan_encoder_type: hybrid
+  protein_encoder_type: esm2
+  esm2_cache_path: data_clean/esm2_cache
+  num_hgt_layers: 0
+  num_hgt_heads: 8
+  use_bio_prior: false
+  use_cross_modal_fusion: true
+  num_fusion_heads: 4
+  decoder_type: hybrid
+  dropout: 0.1
+  loss_fn: bce
+  adversarial_temperature: 1.0
+  label_smoothing: 0.05
+  inductive: true
+
+data:
+  holdout_ratio: 0.15
+  inductive_min_degree: 2
+
+training:
+  epochs: 400
+  batch_size: 1024
+  lr: 1.0e-3
+  weight_decay: 1.0e-5
+  optimizer: adam
+  scheduler: cosine
+  grad_clip: 1.0
+  early_stopping_patience: 40
+  eval_every: 10
+  relation_balance_alpha: 0.5
+  relation_balance_max_weight: 5.0
+  max_edges_per_type: 150000
+  num_negatives: 32
+
+tags:
+  - glycokgnet
+  - inductive
+  - round1
+  - hybrid_glycan
+  - esm2_protein
+  - bce_adversarial

@@ -1,0 +1,33 @@
+# GlycoKGNet model configuration
+# Reference: docs/architecture/model_architecture_design.md
+
+model:
+  name: GlycoKGNet
+  embedding_dim: 256
+
+  # Stage 1: Modality-specific encoders
+  glycan_encoder_type: learnable   # "learnable", "wurcs_features", "hybrid", "tree_mpnn"
+  protein_encoder_type: learnable  # "learnable", "esm2"
+
+  # Stage 2: BioHGT
+  num_hgt_layers: 4
+  num_hgt_heads: 8
+  use_bio_prior: true
+
+  # Stage 3: Cross-Modal Fusion
+  use_cross_modal_fusion: true
+  num_fusion_heads: 4
+
+  # Stage 4: Decoder
+  decoder_type: hybrid  # "hybrid" or "distmult"
+
+  # General
+  dropout: 0.1
+
+  # Data paths (override per environment)
+  esm2_cache_path: null
+  wurcs_map: null
+  text_node_types:
+    - disease
+    - pathway
+    - cellular_location

@@ -1,0 +1,142 @@
+# ETL Pipeline {#etl-pipeline}
+
+glycoMusubi is assembled through a four-stage Extract-Transform-Load (ETL) pipeline that pulls data from federated glycomics, proteomics, and cheminformatics databases, normalises identifiers, builds the unified knowledge graph, and validates it against a set of type constraints. This chapter walks through each stage, the command-line interface, configuration options, and reproducibility tooling.
+
+## Pipeline Overview
+
+The pipeline is implemented in `scripts/pipeline.py` and follows a strict linear dependency chain: Download, then Clean, then Build, then Validate. Each stage reads the artefacts produced by its predecessor and writes self-contained outputs to `data/raw/`, `data/clean/`, `data/kg/`, and `data/reports/`, respectively. This strict separation of concerns means that stages can be re-run independently after the first full pass by supplying the `--stage` flag, which is invaluable during development and debugging.
+
+## Stage 1: Download
+
+The download stage contacts four primary data sources through rate-limited API clients. GlyGen is accessed via a REST JSON interface at 10 requests per second, providing glycoprotein records and site annotations. GlyTouCan is queried through its SPARQL 1.1 endpoint at a more conservative 2 requests per second, yielding glycan accessions and WURCS structural strings. UniProt is accessed via both REST and RDF interfaces at 5 requests per second for protein sequences and PTM annotations. ChEMBL provides bioactivity and compound structure data through its REST JSON API at 8 requests per second.
+
+All clients implement retry logic with exponential backoff to handle transient network failures gracefully. A failed request is retried up to five times with a base delay of 2 seconds that doubles on each attempt (2, 4, 8, 16, and 32 seconds). After the final retry, the error is logged and the record is added to `data/raw/download_errors.json` for manual inspection. The raw payloads are cached as gzipped JSON in `data/raw/<source>/`, and subsequent runs skip records that already exist unless the `--force` flag is passed.
+
+The GlyTouCan SPARQL interaction deserves special mention because it illustrates the pagination strategy used throughout the pipeline. The query template requests WURCS notation for each glycan accession in batches of 10,000, automatically incrementing the OFFSET parameter until fewer than 10,000 results are returned:
+
+```sparql
+PREFIX glycan: <http://purl.jp/bio/12/glyco/glycan#>
+SELECT ?accession ?wurcs
+WHERE {
+  ?saccharide glycan:has_primary_id ?accession .
+  ?saccharide glycan:has_wurcs_label ?wurcs .
+}
+LIMIT 10000
+OFFSET %d
+```
+
+```bash
+# Run the download stage only
+python scripts/pipeline.py --stage download
+
+# Limit to specific sources (useful during development)
+python scripts/pipeline.py --stage download --sources glygen,glytoucan
+```
+
+## Stage 2: Clean
+
+The cleaning stage converts heterogeneous raw payloads into a uniform tabular schema, applying three key transformations that ensure data quality and consistency.
+
+The first transformation is identifier normalisation. Every entity is assigned a canonical identifier following a `<namespace>:<id>` convention --- for example, `glytoucan:G00051MO` for glycans, `uniprot:P02763` for proteins, `hgnc:5360` for genes, `doid:0050117` for diseases, and `chembl:CHEMBL941` for compounds. This uniform namespace scheme makes it possible to detect and resolve cross-database entity collisions.
+
+Building on this normalisation, each record is validated against a JSON-Schema definition stored in `schemas/<entity>.json`. Records that fail validation are diverted to `data/clean/rejected/` with an attached error message, ensuring that malformed data never enters the downstream build stage. Additionally, UniProt isoform accessions (such as P02763-2) are mapped back to the canonical accession while preserving the isoform annotation in a separate column, avoiding inflation of the protein node count with near-identical sequences.
+
+The final and perhaps most consequential transformation is evidence code filtering. Only edges supported by curated evidence codes are retained: ECO:0000269 (experimental evidence used in manual assertion), ECO:0000303 (non-traceable author statement used in manual assertion), and ECO:0000250 (sequence similarity evidence used in manual assertion). This filtering reduces the edge set by approximately 30% but substantially improves the precision of the resulting graph, since computationally inferred annotations are excluded.
+
+```r
+# Inspect evidence code distribution after cleaning
+library(readr)
+library(dplyr)
+
+edges <- read_tsv("data/clean/edges.tsv")
+
+edges %>%
+  count(evidence_code, sort = TRUE) %>%
+  mutate(pct = round(n / sum(n) * 100, 1)) %>%
+  knitr::kable(col.names = c("Evidence code", "Count", "Percentage"))
+```
+
+## Stage 3: Build
+
+The build stage assembles cleaned records into the final knowledge graph through an accumulation and deduplication process. Nodes and edges are gathered from each cleaned source file, with the builder maintaining in-memory hash sets for both node IDs and (source, relation, target) triples. This online deduplication strategy means that duplicate entries are counted for reporting purposes but stored only once, preventing the graph from being inflated by redundant facts appearing across multiple source databases.
+
+After accumulation, the builder performs orphan detection, identifying nodes that appear in the node set but have no incident edges. These orphan nodes are logged in `data/kg/orphan_report.tsv` and excluded from the final graph by default (the `--keep-orphans` flag retains them if needed). At the end of the build stage, the pipeline reports summary statistics: 78,263 nodes, 2,519,438 edges, 10 entity types, 14 relation types, a single connected component, and a density of 8.2 x 10^-4.
+
+## Stage 4: Validate
+
+Validation enforces structural and semantic constraints on the assembled graph, serving as the final quality gate before the graph is released.
+
+The primary validation check is type-constraint verification. Each relation type has a domain/range specification --- for example, the `has_glycan` relation must connect a Protein source to a Glycan target. Violations are written to `data/reports/type_violations.tsv`. In addition to type constraints, certain relations (such as `is_subclass_of` and `part_of`) are expected to form directed acyclic graphs. The validator runs a topological sort on the induced sub-graph for each such relation and reports any cycles found.
+
+When the `--auto-fix` flag is passed, the validator attempts to correct common issues automatically: removing self-loops, reversing edges that violate domain/range constraints (when the reverse direction is valid), and breaking detected cycles by removing the lowest-confidence edge. All automated corrections are logged to `data/reports/auto_fixes.tsv` for transparency and auditability.
+
+```yaml
+# Excerpt from config.yaml -- type constraints
+type_constraints:
+  has_glycan:
+    domain: Protein
+    range: Glycan
+  encodes:
+    domain: Gene
+    range: Protein
+  associated_with:
+    domain: Disease
+    range: [Protein, Glycan]
+```
+
+## Running the Pipeline
+
+The pipeline supports several execution modes to accommodate different use cases. A full run executes all four stages in sequence with a single command (`python scripts/pipeline.py`). A dry run (`--dry-run`) shows what each stage would do without writing files, which is useful for verifying configuration changes. Partial runs starting from a specific stage are supported via the `--stage` flag, and the `--auto-fix` flag can be combined with any execution mode to enable automatic correction of validation issues.
+
+```bash
+# Full pipeline (all four stages)
+python scripts/pipeline.py
+
+# Dry run -- shows what each stage would do without writing files
+python scripts/pipeline.py --dry-run
+
+# Run from the clean stage onward, with auto-fix enabled
+python scripts/pipeline.py --stage clean --auto-fix
+
+# Reproducibility helper -- runs the exact configuration used in the paper
+python scripts/reproduce_paper.py
+```
+
+## Configuration
+
+All tuneable parameters live in a single YAML file (`config.yaml`), which governs download parallelism and rate limits for each API, the set of accepted evidence codes for edge filtering, isoform mapping behaviour, orphan handling strategy, and the list of relations expected to be acyclic. This centralised configuration makes it straightforward to adjust the pipeline for different use cases --- for instance, relaxing evidence code filtering to produce a larger but noisier graph, or tightening rate limits when running on a shared server.
+
+## Output Files
+
+The pipeline produces outputs in both human-readable and machine-optimised formats. Node and edge tables are written as TSV files (`data/kg/nodes.tsv`, `data/kg/edges.tsv`) for inspection and as Parquet files (`data/kg/nodes.parquet`, `data/kg/edges.parquet`) for fast columnar queries. Validation reports are written as JSON and TSV to `data/reports/`, including a summary of violations, a detailed listing of type-constraint failures, and a log of any automated corrections.
+
+## Reproducibility
+
+The full pipeline can be reproduced inside a Docker container with pinned dependencies, ensuring that the graph can be regenerated identically regardless of the host environment. The `reproduce_paper.py` script goes further, hard-coding all random seeds, API snapshot dates, and version hashes so that the resulting graph is byte-identical to the one reported in the accompanying paper.
+
+```bash
+# Build the Docker image
+docker build -t glycoMusubi-etl -f docker/Dockerfile.etl .
+
+# Run the pipeline inside the container
+docker run --rm -v $(pwd)/data:/app/data glycoMusubi-etl \
+    python scripts/pipeline.py
+```
+
+```r
+# Quick sanity check in R after running the pipeline
+library(arrow)
+
+nodes <- read_parquet("data/kg/nodes.parquet")
+edges <- read_parquet("data/kg/edges.parquet")
+
+cat(sprintf("Nodes: %d\nEdges: %d\nEntity types: %d\nRelation types: %d\n",
+            nrow(nodes),
+            nrow(edges),
+            n_distinct(nodes$type),
+            n_distinct(edges$relation)))
+```
+
+## Summary
+
+The four-stage ETL pipeline provides a transparent, reproducible path from federated source databases to the final glycoMusubi knowledge graph. Every intermediate artefact is persisted to disk, every decision is configurable through `config.yaml`, and the entire process can be replayed inside a pinned Docker container to guarantee reproducibility.

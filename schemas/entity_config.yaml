@@ -1,0 +1,132 @@
+schema_version: "1.0"
+description: "Entity type configuration for glycoMusubi knowledge graph"
+
+entity_types:
+  enzyme:
+    description: "Glycosyltransferase enzyme"
+    source_table: "enzymes_clean"
+    id_column: "enzyme_id"
+    label_column: "gene_symbol"
+    id_pattern: "^[OPQ][0-9][A-Z0-9]{3}[0-9]|[A-NR-Z][0-9]([A-Z][A-Z0-9]{2}[0-9]){1,2}(-\\d+)?$"
+    default_metadata:
+      source: "GlyGen"
+    columns:
+      - name: enzyme_id
+        type: string
+        required: true
+      - name: gene_symbol
+        type: string
+        required: false
+      - name: ec_number
+        type: string
+        required: false
+      - name: cazy_family
+        type: string
+        required: false
+
+  protein:
+    description: "Protein (non-enzyme)"
+    source_table: "proteins_clean"
+    id_column: "protein_id"
+    label_column: "gene_symbol"
+    id_pattern: "^[OPQ][0-9][A-Z0-9]{3}[0-9]|[A-NR-Z][0-9]([A-Z][A-Z0-9]{2}[0-9]){1,2}(-\\d+)?$"
+    default_metadata:
+      source: "UniProt"
+    columns:
+      - name: protein_id
+        type: string
+        required: true
+      - name: gene_symbol
+        type: string
+        required: false
+
+  glycan:
+    description: "Glycan structure"
+    source_table: "glycans_clean"
+    id_column: "glycan_id"
+    label_column: "glycan_id"
+    id_pattern: "^G\\d{5}[A-Z]{2}$"
+    default_metadata: {}
+    columns:
+      - name: glycan_id
+        type: string
+        required: true
+      - name: structure
+        type: string
+        required: false
+        metadata_key: "WURCS"
+
+  disease:
+    description: "Disease condition"
+    source_table: "diseases_clean"
+    id_column: "disease_id"
+    label_column: "name"
+    id_pattern: null
+    default_metadata:
+      source: "UniProt"
+    columns:
+      - name: disease_id
+        type: string
+        required: true
+      - name: name
+        type: string
+        required: false
+
+  variant:
+    description: "Genetic variant"
+    source_table: "variants_clean"
+    id_column: "variant_id"
+    label_column: "variant_id"
+    id_pattern: null
+    default_metadata: {}
+    columns:
+      - name: variant_id
+        type: string
+        required: true
+      - name: description
+        type: string
+        required: false
+        metadata_key: "description"
+
+  compound:
+    description: "Chemical compound (inhibitor)"
+    source_table: "compounds_clean"
+    id_column: "compound_id"
+    label_column: "name"
+    id_pattern: "^CHEMBL\\d+$"
+    default_metadata:
+      source: "ChEMBL"
+    columns:
+      - name: compound_id
+        type: string
+        required: true
+      - name: name
+        type: string
+        required: false
+
+  cellular_location:
+    description: "Subcellular compartment or location"
+    source_table: "locations_clean"
+    id_column: "location_id"
+    label_column: "name"
+    id_pattern: "^LOC::[a-z_]+$"
+    default_metadata:
+      source: "UniProt"
+    columns:
+      - name: location_id
+        type: string
+        required: true
+      - name: name
+        type: string
+        required: false
+
+extensibility:
+  allow_new_types: true
+  custom_type_template:
+    description: ""
+    source_table: ""
+    id_column: ""
+    label_column: ""
+    id_pattern: null
+    default_metadata: {}
+    columns: []

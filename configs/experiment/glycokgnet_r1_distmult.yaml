@@ -1,0 +1,38 @@
+# Round 1-DM: GlycoKGNet with DistMult fallback (no HybridLinkScorer)
+# Purpose: Verify pipeline works correctly with simple scoring
+# Should match TransE 400ep baseline (MRR ~0.47)
+name: glycokgnet_r1_distmult
+seed: 42
+embedding_dim: 256
+
+model:
+  name: GlycoKGNet
+  embedding_dim: 256
+  glycan_encoder_type: learnable
+  protein_encoder_type: learnable
+  num_hgt_layers: 0
+  use_bio_prior: false
+  use_cross_modal_fusion: false
+  # Simple DistMult decoder — no HybridLinkScorer overhead
+  decoder_type: distmult
+  dropout: 0.1
+  loss_fn: margin
+  margin: 1.0
+
+training:
+  epochs: 400
+  batch_size: 1024
+  lr: 1.0e-3
+  weight_decay: 0.0
+  optimizer: adam
+  scheduler: none
+  grad_clip: 1.0
+  eval_every: 10
+  relation_balance_alpha: 0.3
+  relation_balance_max_weight: 5.0
+  max_edges_per_type: 0
+
+tags:
+  - glycokgnet
+  - round1
+  - distmult_baseline

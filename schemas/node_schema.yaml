@@ -1,0 +1,142 @@
+schema_version: "1.0"
+description: "Node schema definition for glycoMusubi knowledge graph"
+
+columns:
+  node_id:
+    type: string
+    nullable: false
+    description: "Primary identifier for the node"
+    
+  node_type:
+    type: string
+    nullable: false
+    description: "Type of the node entity"
+    enum:
+      - enzyme
+      - protein
+      - glycan
+      - disease
+      - variant
+      - compound
+      - site
+      - reaction
+      - motif
+      - cellular_location
+      
+  label:
+    type: string
+    nullable: true
+    description: "Human-readable label for the node"
+    
+  metadata:
+    type: string
+    nullable: true
+    description: "JSON-encoded metadata object"
+
+node_types:
+  enzyme:
+    description: "Glycosyltransferase enzyme"
+    id_pattern: "^[OPQ][0-9][A-Z0-9]{3}[0-9]|[A-NR-Z][0-9]([A-Z][A-Z0-9]{2}[0-9]){1,2}(-\\d+)?$"
+    required_metadata:
+      - source
+    optional_metadata:
+      - gene_symbol
+      - ec_number
+      - cazy_family
+      
+  protein:
+    description: "Protein (non-enzyme)"
+    id_pattern: "^[OPQ][0-9][A-Z0-9]{3}[0-9]|[A-NR-Z][0-9]([A-Z][A-Z0-9]{2}[0-9]){1,2}(-\\d+)?$"
+    required_metadata:
+      - source
+    optional_metadata:
+      - gene_symbol
+      
+  glycan:
+    description: "Glycan structure"
+    id_pattern: "^G\\d{5}[A-Z]{2}$"
+    required_metadata: []
+    optional_metadata:
+      - WURCS
+      - iupac
+      - mass
+      
+  disease:
+    description: "Disease condition"
+    id_pattern: null
+    required_metadata:
+      - source
+    optional_metadata:
+      - omim_id
+      - mondo_id
+      
+  variant:
+    description: "Genetic variant"
+    id_pattern: null
+    required_metadata: []
+    optional_metadata:
+      - description
+      - clinical_significance
+      
+  compound:
+    description: "Chemical compound (inhibitor)"
+    id_pattern: "^CHEMBL\\d+$"
+    required_metadata:
+      - source
+    optional_metadata:
+      - smiles
+      - inchi
+      
+  site:
+    description: "PTM site on a protein (glycosylation, phosphorylation, etc.)"
+    id_pattern: "^SITE::[A-Z0-9]+-?\\d*::\\d+::[A-Z]$"
+    required_metadata:
+      - source
+      - position
+      - residue
+    optional_metadata:
+      - site_type
+      - ptm_type
+      - glyco_type
+      - evidence_code
+      - evidence_type
+      - description
+
+  reaction:
+    description: "Enzymatic glycosylation reaction"
+    id_pattern: "^rxn\\..+"
+    required_metadata:
+      - source
+    optional_metadata:
+      - residue_name
+      - glycan_id
+
+  motif:
+    description: "Glycan structural motif"
+    id_pattern: "^GGM\\.\\d+$"
+    required_metadata:
+      - source
+    optional_metadata: []
+
+  cellular_location:
+    description: "Subcellular compartment or location"
+    id_pattern: "^LOC::[a-z_]+$"
+    required_metadata:
+      - source
+    optional_metadata: []
+
+arrow_schema:
+  node_id:
+    arrow_type: "string"
+  node_type:
+    arrow_type: "string"
+  label:
+    arrow_type: "string"
+  source:
+    arrow_type: "list<string>"
+  wurcs:
+    arrow_type: "string"
+  description:
+    arrow_type: "string"
+  gene_symbol:
+    arrow_type: "string"

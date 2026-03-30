@@ -1,0 +1,8 @@
+# Default KGE model configuration
+model:
+  name: TransE
+  embedding_dim: 256
+  margin: 1.0
+  p_norm: 2
+  regularization: 0.0
+  reg_type: l2

@@ -1,0 +1,264 @@
+# API Extension and Customisation {#api-extension}
+
+## Building a New Module
+
+The glycoMusubi Shiny app is designed for extensibility. Every feature
+lives in its own module file under `modules/`, and adding a new one
+follows a consistent pattern. You create a file (for example,
+`modules/mod_new_feature.R`) containing a namespaced UI function and a
+matching server function. The UI function uses `NS(id)` to namespace
+all input and output IDs, preventing collisions with other modules,
+and returns a `tagList` of the interface elements you need:
+
+```r
+mod_new_feature_ui <- function(id) {
+  ns <- NS(id)
+  tagList(
+    selectInput(ns("dataset"), "Dataset", choices = NULL),
+    plotly::plotlyOutput(ns("main_plot")),
+    DT::DTOutput(ns("detail_table"))
+  )
+}
+
+mod_new_feature_server <- function(id, kg_nodes, kg_edges) {
+  moduleServer(id, function(input, output, session) {
+    observe({
+      updateSelectInput(session, "dataset",
+                        choices = unique(kg_nodes$type))
+    })
+    filtered <- reactive({
+      req(input$dataset)
+      kg_nodes[kg_nodes$type == input$dataset, ]
+    })
+    output$main_plot <- plotly::renderPlotly({
+      plotly::plot_ly(filtered(), x = ~score, type = "histogram")
+    })
+    output$detail_table <- DT::renderDT({
+      DT::datatable(filtered(), options = list(pageLength = 15))
+    })
+  })
+}
+```
+
+The server function receives global data (loaded in `global.R`) as
+explicit arguments rather than accessing them through global
+assignment, which keeps dependencies clear and testable. To wire the
+module into the app, add a `nav_panel` call in the UI section of
+`app.R` and invoke the server function with matching IDs:
+
+```r
+# UI: add a nav_panel
+bslib::nav_panel("New Feature",
+                 mod_new_feature_ui("new_feature_1"))
+
+# Server: call the module
+mod_new_feature_server("new_feature_1",
+                       kg_nodes = kg_nodes, kg_edges = kg_edges)
+```
+
+## Exposing a REST API with Plumber
+
+Beyond the interactive Shiny interface, you may want programmatic
+access to the knowledge graph. The plumber package makes it
+straightforward to define a REST API alongside the Shiny app. Create
+an `api/plumber.R` file that loads the same Arrow datasets and exposes
+endpoints for common queries. A node search endpoint accepts a query
+string and returns matching nodes, a neighbours endpoint returns all
+nodes connected to a given ID, and a protein-to-glycan endpoint
+returns the glycans associated with a given UniProt accession:
+
+```r
+library(plumber)
+library(arrow)
+library(dplyr)
+
+kg_dir   <- Sys.getenv("GLYCOKG_KG_DIR", unset = "../data/kg")
+nodes_ds <- open_dataset(file.path(kg_dir, "nodes.parquet"))
+edges_ds <- open_dataset(file.path(kg_dir, "edges.parquet"))
+
+#* @get /api/v1/nodes/search
+#* @param q Search query
+#* @param limit Max results (default 50)
+function(q, limit = 50) {
+  nodes_ds |>
+    filter(grepl(q, name, ignore.case = TRUE)) |>
+    head(as.integer(limit)) |> collect()
+}
+
+#* @get /api/v1/node/<id>/neighbors
+function(id) {
+  nbr <- edges_ds |>
+    filter(source_id == id | target_id == id) |> collect()
+  all_ids <- unique(c(nbr$source_id, nbr$target_id))
+  nodes_ds |> filter(node_id %in% all_ids) |> collect()
+}
+
+#* @get /api/v1/protein/<uniprot>/glycans
+function(uniprot) {
+  glycan_ids <- edges_ds |>
+    filter(source_id == uniprot,
+           edge_type == "has_glycan") |>
+    collect() |> pull(target_id)
+  nodes_ds |>
+    filter(node_id %in% glycan_ids, type == "glycan") |>
+    collect()
+}
+```
+
+To run both the Shiny app and the API in Docker, define two services
+in `docker-compose.yml` that share data volumes via YAML anchors. The
+Shiny app listens on port 3838 and the API on port 8000, but both
+read from the same underlying data:
+
+```yaml
+services:
+  glycokg-app:
+    build: .
+    ports: ["3838:3838"]
+    volumes: &vols
+      - ./data/kg:/srv/data/kg:ro
+      - ./data/processed:/srv/data/processed:ro
+    environment: &env
+      GLYCOKG_KG_DIR: /srv/data/kg
+      GLYCOKG_DATA_DIR: /srv/data/processed
+  glycokg-api:
+    build: { context: ., dockerfile: Dockerfile.api }
+    ports: ["8000:8000"]
+    volumes: *vols
+    environment: *env
+```
+
+## Integrating New Data Sources
+
+When a new dataset needs to join the app, the pattern is consistent:
+add an environment variable, load the data in `global.R`, and mount
+the corresponding volume in Docker. For example, to add site
+annotations, you would extend `global.R` with a new environment
+variable and a fail-fast check for missing files:
+
+```r
+annot_dir <- Sys.getenv("GLYCOKG_ANNOT_DIR",
+                        unset = "../data/annotations")
+site_annotations <- arrow::read_parquet(
+  file.path(annot_dir, "site_annotations.parquet"))
+
+required <- c(file.path(kg_dir, "nodes.parquet"),
+              file.path(annot_dir, "site_annotations.parquet"))
+missing <- required[!file.exists(required)]
+if (length(missing))
+  stop("Missing files:\n", paste(" -", missing, collapse = "\n"))
+```
+
+Then add the volume mount
+(`./data/annotations:/srv/data/annotations:ro`) and environment
+variable (`GLYCOKG_ANNOT_DIR=/srv/data/annotations`) to your
+`docker-compose.yml`. The new data is immediately available to any
+module whose server function receives it as an argument.
+
+## Custom Visualisation Options
+
+The app is not limited to the visualisation libraries used in the
+default modules. For quick plotly charts built from ggplot2 objects,
+`ggplotly` provides a convenient bridge that converts any ggplot into
+an interactive plotly widget:
+
+```r
+output$scatter <- plotly::renderPlotly({
+  p <- ggplot2::ggplot(filtered(),
+         ggplot2::aes(mass, score, color = type)) +
+    ggplot2::geom_point(alpha = 0.6) +
+    ggplot2::theme_minimal()
+  plotly::ggplotly(p)
+})
+```
+
+For fully custom interactive graphics, the `r2d3` package lets you
+write D3.js visualisations that receive data directly from R. This is
+the path to take when you need a visualisation that no existing R
+package provides:
+
+```r
+output$custom_d3 <- r2d3::renderD3({
+  r2d3::r2d3(data = jsonlite::toJSON(graph_data()),
+              script = "www/js/glycan_tree.js", d3_version = 7)
+})
+```
+
+When working with large subgraphs where visNetwork's performance
+degrades, `cyjShiny` (a Cytoscape.js wrapper) handles dense networks
+more gracefully because Cytoscape.js is optimised for graph rendering
+at scale:
+
+```r
+output$cytoscape_graph <- cyjShiny::renderCyjShiny({
+  cyjShiny::cyjShiny(cyjShiny::dataFramesToJSON(
+    data.frame(id = c("G1", "P1"),
+               name = c("GlcNAc", "MUC1")),
+    data.frame(source = "P1", target = "G1",
+               interaction = "has_glycan")
+  ), layoutName = "cose")
+})
+```
+
+## Embedding the App in External Tools
+
+The Shiny app can be embedded in other web pages via an iframe. Set
+the width to 100%, give it enough height (800 pixels works well for
+the full interface), and enable fullscreen if your hosting context
+allows it:
+
+```html
+<iframe src="https://glycokg.example.edu/"
+        width="100%" height="800"
+        frameborder="0" allow="fullscreen"></iframe>
+```
+
+For data export, add a download handler that writes the current
+filtered dataset to CSV. This lets users extract exactly the subset
+they see in the interface for use in external analysis tools:
+
+```r
+output$download_csv <- downloadHandler(
+  filename = function()
+    paste0("glycokg_export_", Sys.Date(), ".csv"),
+  content = function(file)
+    data.table::fwrite(filtered(), file)
+)
+```
+
+For headless or scripted access, a simple R wrapper around the plumber
+API lets users query the knowledge graph from the R console or from
+automated pipelines without ever opening a browser:
+
+```r
+glycokg_search <- function(query, limit = 50,
+                           base = "http://localhost:8000") {
+  url <- paste0(base, "/api/v1/nodes/search?q=",
+                utils::URLencode(query), "&limit=", limit)
+  httr2::request(url) |>
+    httr2::req_perform() |>
+    httr2::resp_body_json(simplifyVector = TRUE)
+}
+```
+
+## Contributing to the Project
+
+If you want to contribute a new module or feature, fork the
+repository and branch from `main`. Keep one module file per feature
+under `modules/` and follow the
+[tidyverse style guide](https://style.tidyverse.org/). Add
+`shinytest2` UI tests alongside `testthat` unit tests, and run
+`lintr::lint_dir()` before submitting. Open a pull request describing
+the change and any new environment variables it introduces.
+
+```r
+test_that("node search returns results", {
+  app <- shinytest2::AppDriver$new(
+    app_dir = "shiny_app/", name = "search-test")
+  app$set_inputs(search_query = "GlcNAc")
+  app$click("search_btn")
+  expect_true(
+    nrow(app$get_value(output = "results_table")) > 0)
+  app$stop()
+})
+```

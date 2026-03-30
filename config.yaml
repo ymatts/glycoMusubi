@@ -1,0 +1,62 @@
+api:
+  glygen_max: null
+  uniprot_max: null
+  chembl_max: null
+  glytoucan_max: null
+
+retry:
+  max_retries: 3
+  backoff_seconds: 2
+
+api_settings:
+  glygen:
+    rate_limit_per_second: 10
+    timeout: 30
+  glytoucan:
+    rate_limit_per_second: 5
+    timeout: 30
+  uniprot:
+    rate_limit_per_second: 10
+    timeout: 30
+  chembl:
+    rate_limit_per_second: 5
+    timeout: 60
+
+directories:
+  raw_data: "data_raw"
+  clean_data: "data_clean"
+  kg_output: "kg"
+  logs: "logs"
+
+download:
+  glygen:
+    gt_url: "https://data.glygen.org/ln2data/releases/data/v-2.9.1/reviewed/human_protein_glycosyltransferase.csv"
+    masterlist_url: "https://data.glygen.org/ln2data/releases/data/v-2.9.1/reviewed/glycan_masterlist.csv"
+    random_seed: 42
+  glytoucan:
+    # New SPARQList-based endpoints (old /glytoucan/glycan/{id} is deprecated)
+    base_url: "https://api.glycosmos.org/sparqlist"
+    gtcid2seqs_endpoint: "gtcid2seqs"  # GlyTouCan ID -> WURCS/GlycoCT
+    glytoucan_list_endpoint: "Glytoucan-list"  # All GlyTouCan IDs with WURCS
+    wurcs2gtcids_endpoint: "wurcs2gtcids"  # WURCS -> GlyTouCan IDs
+    min_request_interval_ms: 200  # Rate limit: 200ms between requests
+  uniprot:
+    base_url: "https://rest.uniprot.org/uniprotkb"
+  chembl:
+    base_url: "https://www.ebi.ac.uk/chembl/api/data"
+
+parallel:
+  enabled: true
+  workers: null  # null = auto-detect CPU count
+  seed: 42
+  batch_size: 100
+
+# Site-level PTM data settings
+site_data:
+  enable_uniprot_sites: true
+  enable_ptmcode: true
+  uniprot_evidence_filter:
+    - "ECO:0000269"  # experimental
+    - "ECO:0000303"  # expert curated
+    - "ECO:0000250"  # manual assertion
+  ptmcode_min_score: 0.30

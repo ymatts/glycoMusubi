@@ -1,0 +1,19 @@
+book_filename: "glycoMusubi-shiny-guide"
+output_dir: "_book"
+delete_merged_file: true
+language:
+  ui:
+    chapter_name: "Chapter "
+rmd_files:
+  - index.Rmd
+  - 01-getting-started.Rmd
+  - 02-overview-dashboard.Rmd
+  - 03-kg-explorer.Rmd
+  - 04-glycan-predictor.Rmd
+  - 05-glycan-retrieval.Rmd
+  - 06-celltype-expression.Rmd
+  - 07-benchmarks.Rmd
+  - 08-embedding-explorer.Rmd
+  - 09-hierarchy-browser.Rmd
+  - 10-deployment.Rmd
+  - 11-api-extension.Rmd

@@ -1,0 +1,80 @@
+/* glycoMusubi Shiny App — Custom Styles */
+
+:root {
+  --glyco-primary: #2b6a99;
+  --glyco-accent: #c04e3f;
+  --glyco-dark: #1d1d2c;
+  --glyco-light: #f8f9fa;
+  --glyco-border: #dee2e6;
+}
+
+/* Navbar */
+.navbar { border-bottom: 3px solid var(--glyco-primary); }
+.navbar-brand { font-weight: 700; letter-spacing: 0.02em; }
+
+/* Cards */
+.card { border: 1px solid var(--glyco-border); border-radius: 8px; }
+.card-header {
+  background: linear-gradient(135deg, var(--glyco-primary), #3a7db5);
+  color: white;
+  font-weight: 600;
+  border-radius: 8px 8px 0 0 !important;
+}
+
+/* Metric value boxes */
+.value-box {
+  border-radius: 8px;
+  padding: 1rem;
+  text-align: center;
+}
+.value-box .value {
+  font-size: 2rem;
+  font-weight: 700;
+  color: var(--glyco-primary);
+}
+.value-box .label {
+  font-size: 0.85rem;
+  color: #6c757d;
+}
+
+/* DataTables */
+.dataTables_wrapper { font-size: 0.9rem; }
+table.dataTable thead th {
+  background: var(--glyco-light);
+  border-bottom: 2px solid var(--glyco-primary) !important;
+}
+
+/* visNetwork container */
+.vis-network { border: 1px solid var(--glyco-border); border-radius: 8px; }
+
+/* Sidebar */
+.well {
+  background: var(--glyco-light);
+  border: 1px solid var(--glyco-border);
+  border-radius: 8px;
+}
+
+/* Tab panels */
+.nav-tabs .nav-link.active {
+  border-color: var(--glyco-primary) var(--glyco-primary) white;
+  color: var(--glyco-primary);
+  font-weight: 600;
+}
+
+/* Loading spinner overlay */
+.shiny-busy {
+  position: fixed;
+  z-index: 1000;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+}
+
+/* Plotly modebar */
+.modebar { opacity: 0.6 !important; }
+.modebar:hover { opacity: 1 !important; }
+
+/* Responsive tweaks */
+@media (max-width: 768px) {
+  .value-box .value { font-size: 1.5rem; }
+}

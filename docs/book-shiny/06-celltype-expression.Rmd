@@ -1,0 +1,73 @@
+# Cell-type Expression Explorer {#celltype-expression}
+
+The Cell-type Expression Explorer module shifts focus from individual proteins and glycans to the broader biological machinery that drives glycosylation. It lets you investigate how glycosylation enzymes are expressed across human cell types, drawing on data from Tabula Sapiens -- a multi-organ single-cell transcriptomic atlas. With expression profiles for 748 cell types and 339 glycosylation-related enzymes, this module gives you a panoramic view of glycosylation machinery usage across the human body.
+
+## Sidebar Controls
+
+The sidebar provides three controls that shape every visualisation on this page. The cell-type selector is a searchable multi-select dropdown populated with all 748 Tabula Sapiens cell types. Start typing a cell name (such as "hepato") and matching entries appear; you can select up to 20 cell types simultaneously, and selections are colour-coded so you can track them across plots.
+
+The enzyme selector works similarly, allowing you to choose up to 30 enzymes at once. Two convenience buttons save time when exploring common pathways. The Core Pathway button loads MGAT1, MGAT2, MAN1A1, MAN1A2, MAN2A1, MAN2A2, GANAB, and GCS1 -- the enzymes responsible for early N-glycan processing. The Terminal Processing button loads sialyltransferases (ST3GAL1--6, ST6GAL1--2), fucosyltransferases (FUT1--8), and galactosyltransferases (B4GALT1--4). Click either button to populate the selector instantly, then add or remove individual enzymes as needed.
+
+A radio-button group at the bottom of the sidebar switches between the three visualisation modes described below.
+
+## Heatmap View
+
+The default view renders a cell types by enzymes expression matrix. Rows correspond to your selected cell types and columns to the selected enzymes. The colour scale uses the Viridis palette, where dark purple indicates low expression and yellow indicates high expression. Hovering over any tile reveals the exact log-normalised expression value.
+
+```r
+# The heatmap is built with plotly::plot_ly(type = "heatmap")
+plot_ly(z = expr_matrix,
+        x = enzyme_names,
+        y = celltype_names,
+        type = "heatmap",
+        colorscale = "Viridis")
+```
+
+Sorting enzymes by pathway order -- core processing enzymes on the left, terminal enzymes on the right -- helps reveal the expression gradient across the glycosylation cascade.
+
+## Bar Chart View
+
+The bar chart mode presents grouped bars that compare enzyme expression levels across the selected cell types. Each cell type gets a distinct colour, the x-axis lists enzymes, and the y-axis shows log-normalised expression. Error bars are not shown because values are atlas-level aggregates rather than per-sample measurements. This view works best when you have 2--5 cell types and want a direct side-by-side comparison for a handful of enzymes.
+
+## Correlation Scatter View
+
+When you select exactly two enzymes, the correlation scatter becomes available. It plots every cell type as a point, with expression of enzyme A on the x-axis and enzyme B on the y-axis. A linear trend line and Pearson correlation coefficient are overlaid, and points are labelled on hover so you can identify outlier cell types that deviate from the trend.
+
+```r
+# Correlation view filters to the two selected enzymes
+# and spreads the expression table wide:
+cor_data <- expr_long %>%
+  filter(enzyme %in% c(enz_a, enz_b)) %>%
+  pivot_wider(names_from = enzyme, values_from = expression)
+```
+
+## Key Biological Insights
+
+Several patterns emerge when exploring the data that are worth keeping in mind. Enzymes in the N-glycan core pathway (MAN1A1, MGAT1, MGAT2) are expressed at relatively constant levels across most cell types. Because every cell needs a functional N-glycan processing pipeline, these genes show little cell-type specificity. For knowledge graph modelling, this uniform expression means core enzymes carry low discriminative power when predicting cell-type-specific glycan profiles.
+
+Terminal enzymes tell a different story. Sialyl- and fucosyltransferases such as ST3GAL1 and FUT1 exhibit high variance across cell types -- exactly the kind of signal that could distinguish glycan repertoires between tissues. However, the corresponding enzyme-glycan edges in the knowledge graph are often incomplete, which limits prediction accuracy at the terminal-modification level.
+
+Be cautious when interpreting zero-expression entries. A zero in the matrix does not necessarily mean "not expressed" -- it can also reflect dropout in single-cell RNA-seq, a well-known technical artefact. Treat zeros with particular caution for lowly-expressed transferases.
+
+## Example Workflow
+
+To compare glycosylation between hepatocytes and T cells, start by opening the Cell-type Expression Explorer tab. In the cell-type selector, type "hepatocyte" and select it, then type "T cell" and pick one or more T-cell subtypes. Click the Terminal Processing button to load the FUT and ST3GAL family members. The heatmap will immediately reveal which terminal enzymes differ between the two cell types.
+
+For a more focused comparison, switch to the bar chart view and look at FUT1 and FUT8 side by side. Then narrow the enzyme selection to just those two and switch to the correlation scatter to examine whether their expression is correlated or independent across all 748 cell types.
+
+```r
+# Quick programmatic check outside the app:
+library(dplyr)
+ts_expr <- readRDS("data/tabula_sapiens_expr.rds")
+
+ts_expr %>%
+  filter(cell_type %in% c("hepatocyte", "CD4-positive T cell"),
+         enzyme %in% c("FUT1", "FUT8")) %>%
+  select(cell_type, enzyme, expression)
+```
+
+## Tips for Effective Use
+
+Selecting all 748 cell types at once will make the heatmap extremely tall and difficult to read, so keep your cell-type selections under 20 for a manageable plot. Every plot includes a camera icon in the plotly toolbar that lets you save a PNG snapshot. Cell-type and enzyme selections persist if you switch between plot types within the same session, so you can freely toggle between views without re-entering your choices.
+
+After identifying interesting enzymes in this module, consider jumping to the Embedding Explorer (Chapter \@ref(embedding-explorer)) to see where those enzymes' proteins land in the ESM-2 UMAP space, providing a complementary geometric perspective on the same biology.

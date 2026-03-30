@@ -1,0 +1,158 @@
+# Knowledge Graph Embedding Models {#kg-embedding}
+
+glycoMusubi ships with GlycoKGNet, a multi-modal knowledge graph embedding model that assigns modality-specific encoders to glycans, proteins, and textual descriptions before scoring candidate triples with a hybrid scoring function. This chapter describes the architecture, training procedure, evaluation protocol, and key ablation results.
+
+## Architecture Overview
+
+GlycoKGNet follows an encode-then-score paradigm consisting of three phases. In the encoding phase, each entity is mapped to a dense vector by the encoder appropriate for its modality --- glycan structures are processed by a tree-structured neural network, protein sequences by a pretrained language model, and textual descriptions by a biomedical text encoder. In the projection phase, all encoder outputs are linearly projected into a shared embedding space of dimension $d$, ensuring that entities of different modalities become directly comparable. In the scoring phase, candidate (head, relation, tail) triples are evaluated by a hybrid scoring function that combines complementary relational models.
+
+The system uses a router that selects the appropriate encoder based on the node type stored in the knowledge graph. Entities that lack a modality-specific representation --- such as disease or pathway nodes that have no natural molecular structure --- are assigned learnable embedding vectors directly, allowing them to participate in the shared space without requiring a dedicated encoder.
+
+## Modality-Specific Encoders
+
+### GlycanTreeEncoder {#glycan-tree-encoder}
+
+The GlycanTreeEncoder is designed to exploit the natural tree structure of glycans. Glycan structures in WURCS notation are parsed into ordered rooted trees where each node corresponds to a monosaccharide residue and edges represent glycosidic linkages. The encoder processes these trees through a bottom-up message-passing scheme consisting of three layers, each with 256 hidden dimensions and 4 attention heads for child aggregation.
+
+Starting from the leaves, each node $v$ aggregates messages from its children $\mathcal{C}(v)$ using a multi-head attention mechanism:
+
+$$
+\mathbf{m}_v^{(\ell)} = \text{Attn}\!\bigl(\mathbf{h}_v^{(\ell-1)},\;
+\{\mathbf{h}_c^{(\ell-1)}\}_{c \in \mathcal{C}(v)}\bigr)
+$$
+
+The aggregated message is then combined with the node's own hidden state through a GRU cell ($\mathbf{h}_v^{(\ell)} = \text{GRU}(\mathbf{h}_v^{(\ell-1)}, \mathbf{m}_v^{(\ell)})$), which allows the encoder to selectively retain or update information at each layer. After the bottom-up pass completes, a single top-down refinement pass propagates contextual information from the root back to the leaves, ensuring that each node's representation is informed by both its descendants and its ancestors. The root embedding is taken as the final glycan representation.
+
+This tree-structured approach is a deliberate design choice. Unlike fingerprint-based methods that flatten the glycan into a fixed-length bit vector (losing structural information in the process) or general-purpose graph neural networks that treat the glycan as an undirected graph (ignoring the rooted tree topology), the GlycanTreeEncoder preserves the hierarchical branching pattern that is central to glycan biology.
+
+```python
+# Simplified forward pass of GlycanTreeEncoder
+class GlycanTreeEncoder(nn.Module):
+    def __init__(self, layers=3, dim=256, heads=4):
+        super().__init__()
+        self.bottom_up = nn.ModuleList(
+            [TreeLayer(dim, heads) for _ in range(layers)]
+        )
+        self.top_down = TreeLayer(dim, heads)
+        self.gru = nn.GRUCell(dim, dim)
+
+    def forward(self, tree):
+        # Bottom-up: leaves → root
+        for layer in self.bottom_up:
+            tree = layer(tree, direction="up")
+        # Top-down refinement: root → leaves
+        tree = self.top_down(tree, direction="down")
+        return tree.root_embedding
+```
+
+### ProteinEncoder {#protein-encoder}
+
+Protein sequences are encoded using ESM-2 with 650 million parameters, which produces per-residue embeddings of dimension 1,280. For site-level tasks, the encoder extracts the embedding at the glycosylation site position and passes it through a site-aware MLP that concatenates a sinusoidal positional encoding of the sequon position: $\mathbf{e}_{\text{site}} = \text{MLP}([\mathbf{h}_i \,\|\, \text{PE}(i)])$, where $\mathbf{h}_i$ is the ESM-2 embedding at residue $i$. The MLP consists of two layers (mapping the concatenated 1,280 + 256 input dimensions through 512 to 256), and only the last four transformer layers of ESM-2 are unfrozen during fine-tuning, balancing adaptation to the glycosylation domain against the risk of catastrophic forgetting of the pretrained protein representations.
+
+This design reflects the insight that glycosylation site prediction is fundamentally a local-context problem: the identity and accessibility of the site residue, together with its immediate sequence neighbourhood, are the primary determinants of which glycan structures can be attached. By focusing the MLP on the site-position embedding rather than a global sequence summary, the encoder can capture these local determinants with high fidelity.
+
+```r
+# Loading pre-computed protein embeddings in R
+library(arrow)
+library(dplyr)
+
+prot_emb <- read_parquet("data/embeddings/protein_esm2.parquet")
+
+cat(sprintf("Proteins: %d\nEmbedding dim: %d\n",
+            n_distinct(prot_emb$uniprot_id),
+            ncol(prot_emb) - 1L))  # subtract ID column
+```
+
+### TextEncoder {#text-encoder}
+
+Free-text descriptions --- disease definitions, pathway summaries, and similar biomedical narratives --- are encoded with PubMedBERT (110 million parameters). In contrast to the protein encoder, all transformer weights are frozen; only a learned two-layer MLP projection head (mapping from 768 through 512 to 256 dimensions with GELU activation and 0.1 dropout) is trained to map the `[CLS]` representation into the shared embedding space. Freezing the backbone is justified because the text descriptions in glycoMusubi are relatively short and formulaic, and the pretrained PubMedBERT representations already capture the relevant biomedical semantics without further adaptation.
+
+## Scoring Function {#scoring-function}
+
+GlycoKGNet uses a hybrid scorer that combines DistMult and RotatE. For a triple $(h, r, t)$ the score is:
+
+$$
+s(h, r, t) = \alpha_r \cdot s_{\text{DistMult}}(h, r, t) +
+(1 - \alpha_r) \cdot s_{\text{RotatE}}(h, r, t)
+$$
+
+where $\alpha_r \in [0, 1]$ is a per-relation adaptive weight learned during training. The intuition behind this hybrid is that different relations in glycoMusubi have different symmetry properties: DistMult excels at symmetric relations like `interacts_with`, while RotatE handles asymmetric and compositional patterns such as `substructure_of` and `catalyzes`. Rather than committing to a single scoring paradigm, the model learns the optimal blend for each relation type, allowing it to adapt to the heterogeneous relational structure of glycobiology data.
+
+## Training Procedure {#training}
+
+Training employs type-constrained negative sampling: for each positive triple, 64 negative triples are generated by corrupting the head or tail while respecting domain and range constraints. This prevents the generation of trivially easy negatives --- for instance, replacing a protein head with a disease node for the `has_glycan` relation --- which would inflate evaluation metrics without improving the model's ability to make biologically meaningful distinctions.
+
+The training loss combines an InfoNCE contrastive objective with self-adversarial weighting:
+
+$$
+\mathcal{L} = -\log \frac{\exp(s^{+} / \tau)}
+{\exp(s^{+} / \tau) + \sum_{j=1}^{64} w_j \exp(s_j^{-} / \tau)}
+$$
+
+where $\tau = 0.07$ is the temperature and the self-adversarial weights $w_j$ are proportional to $\exp(s_j^{-})$, assigning higher weight to harder negatives. This weighting scheme focuses the training signal on the most informative negative examples --- those that the model currently scores nearly as highly as the positive --- which accelerates convergence and improves final performance.
+
+The model is optimised with AdamW (learning rate $1 \times 10^{-4}$, weight decay $1 \times 10^{-2}$) using a cosine annealing schedule with 5 warm-up epochs over a total of 200 epochs. Each batch contains 1,024 triples.
+
+```bash
+# Launch training
+python scripts/train_embedding.py \
+    --config configs/glycokgnet.yaml \
+    --gpus 1 \
+    --epochs 200 \
+    --batch-size 1024 \
+    --negatives 64 \
+    --tau 0.07
+```
+
+## Inductive Evaluation {#inductive-eval}
+
+To test generalisation to unseen entities, 15% of entities are held out entirely during training, along with all their incident edges. At evaluation time, the held-out entities are encoded from their raw features (protein sequences, WURCS strings, or text descriptions) and scored against the full entity vocabulary. This is a stringent test of the model's ability to generalise beyond memorised embeddings, and it is particularly relevant for glycobiology where new glycan structures and protein annotations are continually added to upstream databases.
+
+The inductive split produces 66,524 training entities with 2,143,022 edges, 5,870 validation entities with 188,208 edges, and 5,869 test entities with 188,208 edges. The model achieves an inductive MRR of 0.207 in the filtered setting, demonstrating that the modality-specific encoders can produce meaningful representations for entities never seen during training.
+
+## Comparison with TransE {#transe-comparison}
+
+A comparison with a TransE baseline trained on the same splits reveals an instructive pattern. TransE achieves a higher overall MRR (0.312 vs 0.207) and Hits@10 (0.481 vs 0.349) because the graph is dominated by hierarchical relations (`is_subclass_of`, `part_of`) that naturally favour TransE's translational inductive bias. However, on the biologically critical `has_glycan` relation --- predicting which glycan structures are attached at a given site --- GlycoKGNet outperforms TransE by a factor of 3.5 (MRR of 0.084 vs 0.024).
+
+| Metric | TransE | GlycoKGNet | Ratio |
+|:-------|-------:|-----------:|------:|
+| Overall MRR | **0.312** | 0.207 | 0.66 |
+| MRR on `has_glycan` | 0.024 | **0.084** | 3.5x |
+| MRR on `is_subclass_of` | **0.614** | 0.402 | 0.66 |
+| Hits@10 | **0.481** | 0.349 | 0.73 |
+
+Table: TransE vs GlycoKGNet on the inductive evaluation split.
+
+This result highlights a fundamental tension in knowledge graph embedding: aggregate metrics can be dominated by high-frequency relations that may not be the most scientifically interesting. For glycoMusubi, the `has_glycan` relation is the one that underpins downstream glycan prediction tasks, and GlycoKGNet's 3.5-fold advantage on this relation demonstrates the value of modality-specific encoders that can leverage the structural and sequence information inherent in glycans and proteins.
+
+## Ablation: Encoder Variants {#ablation-encoders}
+
+To quantify the contribution of the GlycanTreeEncoder, it was replaced with three alternative glycan encoders while keeping the rest of the architecture fixed.
+
+| Glycan encoder | has_glycan MRR | Overall MRR |
+|:---------------|---------------:|------------:|
+| **GlycanTreeEncoder** | **0.084** | 0.207 |
+| SweetNet-GNN | 0.069 | 0.195 |
+| GIFFLAR-hypergraph | 0.072 | 0.198 |
+| Morgan fingerprint (2048-bit) | 0.041 | 0.172 |
+
+Table: Ablation over glycan encoder variants.
+
+The tree encoder's explicit modelling of the WURCS tree hierarchy gives it a consistent advantage across both metrics. The gap is especially pronounced compared to the Morgan fingerprint baseline, which suffers from hash collisions when representing rare glycan structures. SweetNet-GNN and GIFFLAR-hypergraph perform respectably but cannot match the tree encoder's ability to capture the rooted branching topology that is fundamental to glycan structure.
+
+## Embedding Dimension Selection
+
+A grid search over embedding dimensions (with all other hyperparameters fixed) identified 256 as the optimal choice, achieving MRR of 0.207 and Hits@10 of 0.349 with 30.8 million parameters. Lower dimensions (64 and 128) showed clear underfitting, while dimension 512 produced a slight performance drop despite nearly doubling the parameter count, suggesting mild overfitting that regularisation alone could not prevent. This result informed the default configuration shipped with glycoMusubi.
+
+| Dimension | MRR | Hits@10 | Params (M) |
+|----------:|----:|--------:|-----------:|
+| 64 | 0.163 | 0.274 | 18.2 |
+| 128 | 0.189 | 0.318 | 22.4 |
+| **256** | **0.207** | **0.349** | **30.8** |
+| 512 | 0.204 | 0.345 | 47.6 |
+
+Table: Embedding dimension grid search results.
+
+## Summary
+
+GlycoKGNet introduces modality-aware encoders --- GlycanTreeEncoder for WURCS trees, ESM-2 for proteins, and PubMedBERT for text --- combined with a hybrid DistMult/RotatE scoring function that adapts its blend per relation type. While TransE remains competitive on hierarchy-heavy aggregate metrics, GlycoKGNet delivers a 3.5-fold improvement on the `has_glycan` relation that underpins downstream glycan prediction tasks. The ablation studies confirm that the tree-structured glycan encoder and the 256-dimensional embedding space are well-suited to the structure and scale of the glycoMusubi knowledge graph.

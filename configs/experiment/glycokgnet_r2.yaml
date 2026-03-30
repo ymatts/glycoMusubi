@@ -1,0 +1,54 @@
+# Round 2: GlycoKGNet + WURCS glycan features + BCE self-adversarial loss
+# Target: MRR 0.60-0.70
+name: glycokgnet_r2
+seed: 42
+embedding_dim: 256
+
+model:
+  name: GlycoKGNet
+  embedding_dim: 256
+  # Encoders: hybrid glycan (learnable + WURCS), learnable protein
+  glycan_encoder_type: hybrid
+  protein_encoder_type: learnable
+  # BioHGT message-passing
+  num_hgt_layers: 4
+  num_hgt_heads: 8
+  use_bio_prior: true
+  # Cross-modal fusion
+  use_cross_modal_fusion: true
+  num_fusion_heads: 4
+  # Hybrid decoder
+  decoder_type: hybrid
+  dropout: 0.1
+  # BCE loss with self-adversarial negative sampling
+  loss_fn: bce
+  adversarial_temperature: 1.0
+  label_smoothing: 0.05
+
+training:
+  epochs: 400
+  batch_size: 1024
+  lr: 1.0e-3
+  weight_decay: 1.0e-5
+  optimizer: adam
+  scheduler: cosine
+  grad_clip: 1.0
+  early_stopping_patience: 40
+  eval_every: 10
+  relation_balance_alpha: 0.3
+  relation_balance_max_weight: 5.0
+  use_hgt_loader: true
+  hgt_batch_size: 1024
+  hgt_num_samples:
+    - 512
+    - 512
+    - 256
+    - 128
+  gradient_accumulation_steps: 4
+  max_edges_per_type: 200000
+
+tags:
+  - glycokgnet
+  - round2
+  - wurcs_hybrid
+  - bce_adversarial

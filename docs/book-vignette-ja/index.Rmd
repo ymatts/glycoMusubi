@@ -1,0 +1,25 @@
+---
+title: "glycoMusubi: ヴィネット＆技術ガイド"
+author: "松井 悠輔"
+date: "`r Sys.Date()`"
+site: bookdown::bookdown_site
+documentclass: book
+bibliography: references.bib
+biblio-style: apalike
+link-citations: yes
+description: "glycoMusubiナレッジグラフ、埋め込みモデル、階層的糖鎖予測ベンチマークの包括的技術ガイド。"
+---
+
+# まえがき {-}
+
+本書は糖鎖生物学研究のための統合ナレッジグラフ **glycoMusubi** の包括的ガイドです。生物学的基盤から計算手法、実践的ワークフローまでを体系的に解説します。
+
+[English version](../book-vignette/_book/index.html){target="_blank"}
+
+## 対象読者 {-}
+
+本書は糖鎖生物学者、バイオインフォマティシャン、機械学習研究者、そして糖鎖修飾とナレッジグラフを学ぶ学生を対象としています。糖鎖生物学の基礎から始め、glycoMusubiの設計思想と技術的詳細を経て、Rを用いた実践的な解析ワークフローまでを段階的に進みます。
+
+## 引用 {-}
+
+> Matsui Y. (2026) Hierarchical glycan prediction from protein sequence reveals a determination boundary at the structural-class level. *Bioinformatics*.

@@ -1,0 +1,140 @@
+schema_version: "1.0"
+description: "Relation type configuration for glycoMusubi knowledge graph"
+
+relation_types:
+  inhibits:
+    description: "Chemical compound inhibits enzyme activity"
+    source_type: compound
+    target_type: enzyme
+    source_table: "edges_enzyme_compound"
+    source_column: "compound_id"
+    target_column: "enzyme_id"
+    directionality: directed
+    ontology_uri: "http://purl.obolibrary.org/obo/RO_0002449"
+    inverse_relation: "inhibited_by"
+    default_metadata:
+      source: "ChEMBL"
+    metadata_columns:
+      - name: type
+        type: string
+        description: "Activity type (IC50, Ki, Kd, Inhibition)"
+      - name: value
+        type: float
+        description: "Activity value"
+      - name: units
+        type: string
+        description: "Activity units (nM, uM, etc.)"
+
+  has_glycan:
+    description: "Protein has glycan modification"
+    source_type:
+      - protein
+      - enzyme
+    target_type: glycan
+    source_table: "edges_glycan_protein"
+    source_column: "protein_id"
+    target_column: "glycan_id"
+    directionality: directed
+    ontology_uri: "http://purl.obolibrary.org/obo/RO_0002180"
+    inverse_relation: "glycosylates"
+    default_metadata:
+      source: "GlyGen"
+    metadata_columns: []
+
+  associated_with_disease:
+    description: "Protein is associated with disease condition"
+    source_type:
+      - protein
+      - enzyme
+    target_type: disease
+    source_table: "edges_protein_disease"
+    source_column: "protein_id"
+    target_column: "disease_id"
+    directionality: directed
+    ontology_uri: "http://purl.obolibrary.org/obo/RO_0002200"
+    inverse_relation: "has_associated_protein"
+    default_metadata:
+      source: "UniProt"
+    metadata_columns:
+      - name: evidence
+        type: string
+        description: "Evidence type for association"
+
+  has_variant:
+    description: "Protein has genetic variant"
+    source_type: protein
+    target_type: variant
+    source_table: "edges_protein_variant"
+    source_column: "protein_id"
+    target_column: "variant_id"
+    directionality: directed
+    ontology_uri: "http://purl.obolibrary.org/obo/SO_0001060"
+    inverse_relation: "variant_of"
+    default_metadata:
+      source: "UniProt"
+    metadata_columns:
+      - name: clinical_significance
+        type: string
+        description: "Clinical significance of the variant"
+
+  glycosylated_at:
+    description: "Glycosylation site has associated glycan (type-matched)"
+    source_type: site
+    target_type: glycan
+    source_table: "inferred"
+    source_column: "site_id"
+    target_column: "glycan_id"
+    directionality: directed
+    ontology_uri: null
+    inverse_relation: "has_glycosylation_site"
+    default_metadata:
+      source: "inferred"
+    metadata_columns: []
+
+  localized_in:
+    description: "Protein or enzyme is localized in a subcellular compartment"
+    source_type:
+      - protein
+      - enzyme
+    target_type: cellular_location
+    source_table: "edges_protein_location"
+    source_column: "protein_id"
+    target_column: "location_id"
+    directionality: directed
+    ontology_uri: "http://purl.obolibrary.org/obo/RO_0001025"
+    inverse_relation: "has_localized_protein"
+    default_metadata:
+      source: "UniProt"
+    metadata_columns: []
+
+validation_rules:
+  asymmetric_relations:
+    - inhibits
+    - has_glycan
+    - associated_with_disease
+    - has_variant
+    - glycosylated_at
+    - localized_in
+  
+  symmetric_relations: []
+  
+  transitive_relations: []
+  
+  acyclic_relations:
+    - inhibits
+    - has_variant
+
+extensibility:
+  allow_new_relations: true
+  custom_relation_template:
+    description: ""
+    source_type: ""
+    target_type: ""
+    source_table: ""
+    source_column: ""
+    target_column: ""
+    directionality: "directed"
+    ontology_uri: null
+    inverse_relation: null
+    default_metadata: {}
+    metadata_columns: []

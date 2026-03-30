@@ -1,0 +1,66 @@
+# KG Explorer {#kg-explorer}
+
+The KG Explorer module is where you interrogate the knowledge graph directly. It lets you search for nodes by ID or name, visualise their local neighbourhood as an interactive force-directed graph, and inspect the resulting subgraph in tabular form. Whether you want to know what entities are connected to a specific protein, which glycans are associated with a particular enzyme, or what ChEMBL compounds inhibit a given target, this is the module to use.
+
+```
+<!-- screenshot placeholder: kg_explorer_full.png -->
+<!-- Full KG Explorer tab: sidebar with search box and controls on the left,
+     visNetwork graph in the centre, value boxes and tables below. -->
+```
+
+## Sidebar Controls
+
+The left sidebar provides three controls that shape your query. The search input accepts a node ID or partial name and matches it against the `node_id` column using a case-insensitive pattern match. This means you can type partial strings: `P12345` matches an exact UniProt accession, `MGAT` finds all MGAT-family enzymes, `G00` catches GlyTouCan IDs starting with that prefix, and `breast` surfaces disease nodes containing that term.
+
+```r
+# Internal matching logic (simplified)
+matched <- nodes |>
+  dplyr::filter(grepl(query, node_id, ignore.case = TRUE))
+```
+
+Below the search box, a node type dropdown lets you restrict results to one of the 10 entity types (or leave it on "All"). Finally, a max-neighbours slider controls how many neighbouring nodes are pulled into the subgraph, ranging from 10 to 500 with a default of 50. Lower values produce cleaner, more focused graphs, while higher values reveal more context at the cost of visual complexity. Start with a low value (20--30) to get an overview, then increase if you need more surrounding structure. Very large subgraphs beyond 300 nodes can be slow to render.
+
+```
+<!-- screenshot placeholder: sidebar_controls.png -->
+<!-- Close-up of the sidebar: search box with "MGAT" typed,
+     node type set to "enzyme", max neighbours at 50. -->
+```
+
+## Subgraph Visualisation
+
+The centrepiece of the module is a visNetwork force-directed graph that fills the main panel. Each node type has a distinct colour: enzymes are red, proteins blue, glycans green, diseases purple, compounds orange, sites brown, organisms pink, pathways grey, cellular locations teal, and subclasses gold. This colour coding makes it easy to see the composition of a neighbourhood at a glance.
+
+The graph supports rich interaction. Hover over any node to see its full ID and type in a tooltip. Click a node to highlight it and its direct connections, dimming everything else. Drag nodes to rearrange the layout manually, scroll to zoom in and out, and double-click the background to reset the view. Navigation buttons in the bottom-left corner let you zoom to fit, and a physics toggle freezes node positions when you want a cleaner screenshot.
+
+```
+<!-- screenshot placeholder: visnetwork_subgraph.png -->
+<!-- A subgraph centred on protein P07602 showing connected glycans (green),
+     sites (brown), and diseases (purple). Edges are labelled with relation type. -->
+```
+
+## Value Boxes and Detail Tables
+
+Three value boxes appear below the graph, displaying the number of matched nodes, the total edges in the subgraph, and the count of distinct node types among the neighbours. These update reactively as you change the search query or filters, giving you instant feedback on the scope of your current exploration.
+
+Below the value boxes, two DataTables tabs provide structured access to the subgraph data. The Node Table shows each node's unique identifier, entity type, human-readable label (gene symbol, glycan composition, etc.), and any additional metadata stored as key-value pairs. The Edge Table lists each relationship with its source and target node IDs, relation type, and confidence score where available. Both tables support searching, sorting, and CSV export via the DT toolbar, making it easy to extract data for downstream analysis.
+
+```
+<!-- screenshot placeholder: detail_tables.png -->
+<!-- The two tabs showing node table (active) and edge table. -->
+```
+
+## Example Workflows
+
+To explore a protein and its connections, type a UniProt accession like `P12345` in the search box, leave the node type filter on "All" and max neighbours at 50, then click Search. The graph will show the protein at the centre with connected glycans, sites, diseases, and compounds radiating outward. Switch to the Edge Table to see the exact relation types linking them.
+
+For a more targeted search, try finding all MGAT enzymes and their glycan products. Type `MGAT` in the search box, set the node type filter to "enzyme", and increase max neighbours to 100. The resulting graph displays the matched MGAT enzymes clustered together, with glycan product nodes fanning out in green. Hover over individual glycans to read their GlyTouCan IDs.
+
+You can also browse by entity type without a specific search term. Leave the search box empty, set the node type filter to "compound", and keep max neighbours at 30. The graph will show compound nodes connected to their target enzymes via `inhibits` edges. Use the Node Table tab to sort by label and locate a specific compound name.
+
+## Performance Considerations
+
+The knowledge graph contains 2.5 million edges, so the Explorer pre-filters to a local subgraph before rendering. For a specific ID with 50 neighbours, rendering takes less than a second. A pattern match with 100 neighbours typically takes 2--5 seconds, while a broad query (empty search with type filter and 500 neighbours) may take 5--15 seconds. If the graph feels sluggish, reduce the max-neighbours slider or add a more specific search term to narrow the result set.
+
+## Next Steps
+
+To move beyond graph exploration and examine glycosylation predictions for a specific protein, continue to Chapter \@ref(glycan-predictor).

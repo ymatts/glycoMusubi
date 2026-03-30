@@ -1,0 +1,91 @@
+# Glycan Retrieval {#glycan-retrieval}
+
+The Glycan Retrieval module takes a different approach from the per-site predictions of the previous chapter. Instead of asking "is this site glycosylated?", it asks "which glycan is most likely to be found here?" Given a protein, the module ranks all 2,357 candidate glycans by predicted similarity and presents the results as a scored list, letting you see which glycan structures the model considers most likely to be associated with the query protein.
+
+## How to Use
+
+Enter a UniProt ID in the sidebar, select a retrieval mode (site-level or protein-level), adjust the Top-K slider to control how many ranked results are displayed (between 20 and 100), and click Retrieve. The main panel will populate with a ranked bar chart and summary statistics.
+
+```
+<!-- screenshot placeholder: retrieval_sidebar.png -->
+<!-- Sidebar showing UniProt input, retrieval mode radio buttons
+     (site-level selected), and Top-K slider set to 50. -->
+```
+
+## Retrieval Modes
+
+The module offers two embedding-based retrieval strategies, both ranking the same pool of 2,357 candidate glycans but using different protein representations.
+
+Site-level retrieval uses per-residue ESM-2 embeddings extracted at each glycosylation site. The embedding for a specific site position is compared against all glycan embeddings via cosine similarity, making this the right choice when you care about which glycan occupies a particular position on the protein. It is more specific but requires that the protein has at least one annotated glycosylation site.
+
+Protein-level retrieval, by contrast, uses a mean-pooled ESM-2 embedding averaged across all residues. This single protein vector is compared against the full glycan library, providing a holistic view of which glycans are compatible with the protein overall. It works for any protein with an ESM-2 embedding, even those without annotated sites.
+
+```
+<!-- screenshot placeholder: retrieval_mode_comparison.png -->
+<!-- Side-by-side diagram: site-level uses a single residue embedding vector;
+     protein-level uses the mean of all residue embeddings. -->
+```
+
+## Reading the Results
+
+The main panel displays a horizontal bar chart showing the top-K glycans ranked by similarity score, with the highest-scoring glycan at the top. Bar length encodes the cosine similarity score (ranging from 0 to 1), and colour distinguishes true associations -- glycans that actually appear in the KG as connected to this protein via `has_glycan` edges are shown in green, while all others appear in grey. The GlyTouCan accession for each glycan is labelled on the y-axis.
+
+```
+<!-- screenshot placeholder: score_distribution_chart.png -->
+<!-- Horizontal bar chart with 50 glycans ranked by score.  Two bars near
+     rank 15 and rank 32 are highlighted in green as true positives. -->
+```
+
+High scores (above 0.8) indicate strong embedding similarity between the protein or site and the glycan. The rank of the first green bar tells you how far down the list the system must go before finding a correct glycan -- this is the key signal to watch for.
+
+## Understanding Mean Reciprocal Rank
+
+Below the chart, a summary card reports the Mean Reciprocal Rank (MRR) for the current query. MRR measures how close to the top of the ranked list the correct glycan appears. It is computed as:
+
+$$\text{MRR} = \frac{1}{|Q|} \sum_{i=1}^{|Q|} \frac{1}{\text{rank}_i}$$
+
+where $\text{rank}_i$ is the position of the first correct glycan for the $i$-th query. An MRR of 1.0 means the correct glycan is always ranked first; 0.5 means it is typically second; 0.1 puts it around rank 10.
+
+The current system-wide MRR for site-level retrieval is 0.066, meaning the true glycan appears on average around rank 15 out of 2,357 candidates. For protein-level retrieval the MRR drops to approximately 0.004, placing the true glycan around rank 233. While 0.066 may sound low in isolation, placing the correct glycan in the top 1% of candidates is a meaningful signal -- especially for narrowing down options before experimental validation.
+
+```
+<!-- screenshot placeholder: mrr_summary_card.png -->
+<!-- Summary card showing "Site-Level MRR: 0.066" and
+     "Average Rank of True Glycan: ~15 / 2,357". -->
+```
+
+## When Results Are Unavailable
+
+Not all proteins have pre-computed retrieval results. If you enter a protein ID that lacks them, the module displays a benchmark summary card instead of the ranked list. This card shows the system-wide average MRR for both retrieval modes, the number of proteins with available results, and a note explaining why coverage is missing (typically because no ESM-2 embedding exists or the protein was not in the evaluation set).
+
+```
+<!-- screenshot placeholder: no_results_card.png -->
+<!-- Card with header "No retrieval results for Q9Y2C3" and
+     system-wide MRR summary below. -->
+```
+
+## Cluster-Level Retrieval
+
+While pinpointing the exact glycan is challenging, predicting the correct glycan subclass performs roughly ten times better. Cluster-level retrieval -- predicting the structural class (e.g. high-mannose, complex, hybrid) rather than the exact GlyTouCan ID -- achieves an MRR of approximately 0.60 with an average rank of about 2 out of 143 subclasses. This means the system is quite reliable at identifying what type of glycan is likely at a given site, even when it cannot determine the exact structure. If your research question is "what type of glycan is likely here?" rather than "which exact glycan?", the cluster-level results available in the Benchmarks module are far more actionable.
+
+## Practical Guidance
+
+When interpreting the rankings, the top 5 results are worth investigating as strong candidates, especially if multiple glycans from the same subclass cluster together. The top 20 form a reasonable shortlist for experimental follow-up. Beyond rank 50, returns diminish and the signal becomes noisy.
+
+Several factors can affect ranking quality. Proteins with many known glycans (10 or more) will inevitably have some that rank lower, bringing down the per-protein MRR. Rare glycan types with few training examples may be systematically under-ranked. And because the model was trained primarily on human glycosylation data, performance on non-human proteins may be lower.
+
+A recommended workflow is to run site-level retrieval first for maximum specificity, note the top 10 glycan IDs and their subclass labels, then cross-reference with the Known Glycans tab in the Glycan Predictor module (Chapter \@ref(glycan-predictor)). If more context is needed, check the Benchmarks module for cluster-level metrics. For programmatic access outside the app, the retrieval results are stored as a Parquet file:
+
+```r
+# Example: programmatic access to retrieval results
+library(arrow)
+results <- read_parquet("data/retrieval_results.parquet")
+results |>
+  dplyr::filter(protein_id == "P07602") |>
+  dplyr::arrange(desc(score)) |>
+  head(20)
+```
+
+## Next Steps
+
+The remaining modules cover Cell-type Expression (Chapter 6), Benchmarks (Chapter 7), Embedding Explorer (Chapter 8), and Hierarchy Browser (Chapter 9). If you want to understand how the retrieval metrics were computed and compared across models, proceed to Chapter 7 (Benchmarks).

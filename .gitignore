@@ -1,0 +1,58 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Data (large files)
+data_raw/
+data_clean/
+kg/
+experiments_v2/
+*.pt
+*.pth
+*.parquet
+
+# Shiny app data
+shiny_app/data/*.tsv
+shiny_app/data/*.pt
+
+# R
+.Rhistory
+.Rproj.user
+_book/
+
+# LaTeX
+*.aux
+*.log
+*.out
+*.toc
+*.pdf
+*.synctex.gz
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+logs/
+*.log
+
+# Environment
+.env
+*.env

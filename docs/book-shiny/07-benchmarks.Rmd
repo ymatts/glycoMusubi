@@ -1,0 +1,202 @@
+# Benchmark Dashboard {#benchmarks}
+
+## What the Dashboard Shows You
+
+The Benchmark Dashboard is your central window into how well the
+glycoMusubi model pipeline predicts glycan structures at different levels
+of specificity. It consolidates results from 33 experiments across 6
+hierarchical prediction tasks into an interactive interface of
+filterable tables, charts, and training-history plots. Rather than
+digging through log files or spreadsheets, you can assess and compare
+model performance entirely within the browser. Every element on the
+page is live: tables are sortable and searchable, charts respond to
+hover and click events, and experiment selections propagate instantly
+across all panels.
+
+When the module loads, four summary cards appear at the top of the
+page, each delivering one key number about the best model
+configuration found so far. The headline F1 (macro) score of 0.924
+represents the harmonic mean of precision and recall across all
+classes, giving you a balanced view of overall classification quality
+that is not distorted by class imbalance. The Hits@5 value of 0.786
+tells you how often the correct answer appears among the model's top
+five predictions, a metric that matters greatly for retrieval-oriented
+workflows where a human expert will review a short-list of candidates.
+The MRR (mean reciprocal rank) of 0.066 captures the average position
+of the correct answer across all test queries, penalising low ranks
+more harshly than Hits@5 and thus reflecting a stricter standard.
+Finally, the determination gap of 10x quantifies the performance ratio
+between cluster-level tasks and exact-ID tasks, highlighting the
+boundary where the model transitions from strong to weak predictions.
+These four cards update automatically whenever new experiment results
+are added to the data directory.
+
+## The Hierarchical Benchmark Table
+
+Below the summary cards sits a sortable, paginated table that breaks
+performance down across six hierarchical tasks, ordered from coarsest
+to finest granularity. At the coarsest level, glycan superclass
+prediction distinguishes among roughly 15 candidates and achieves 0.97
+accuracy with an F1 of 0.96 using only the knowledge graph. Glycan
+class prediction, with roughly 80 candidates, is nearly as strong at
+0.94 accuracy and 0.93 F1, still relying on the KG alone.
+
+Moving to glycan subclass, the candidate set grows to roughly 250 and
+the model begins incorporating ESM protein embeddings alongside the
+KG. This hybrid approach yields an F1 of 0.92 with precision at 0.93
+and recall at 0.91, showing that protein-level information adds
+genuine signal at this resolution. The transition becomes sharper at
+the cluster level, where roughly 1,200 candidate glycans push the
+primary metric to Hits@5 at 0.79 and MRR at 0.34. Performance
+reflects the fact that distinguishing among hundreds of structurally
+similar clusters requires the model to capture subtle compositional
+differences.
+
+At the family level (roughly 4,500 candidates), Hits@5 drops to 0.41
+and MRR to 0.09, indicating that the model can still place the correct
+answer in the top five about four times out of ten, but its confidence
+ranking weakens substantially. The most challenging task, exact glycan
+ID prediction across roughly 58,000 candidates, manages only Hits@5 of
+0.08 and MRR of 0.02. These numbers are not surprising given the
+enormous output space, but they establish a clear baseline for future
+improvements.
+
+You can click any column header to sort the table or use the search
+box above it to filter by task name or model type. This interactivity
+makes it easy to focus on the specific task that matters most for your
+research question.
+
+## The Performance Bar Chart and the Determination Boundary
+
+A horizontal bar chart visualises the primary metric for each of the
+six tasks, offering an immediate visual summary that complements the
+numerical table. The bars are colour-coded green for tasks above the
+determination boundary (cluster level and coarser) and orange for
+tasks below it (family and exact-ID). This colour split draws your eye
+to the critical transition point in model capability.
+
+```r
+plotly::plot_ly(
+  data = bench_summary,
+  x = ~value, y = ~task,
+  type = "bar", orientation = "h",
+  color = ~above_boundary,
+  colors = c("above" = "#2ca02c", "below" = "#ff7f0e")
+) %>%
+  layout(yaxis = list(categoryorder = "array",
+                      categoryarray = rev(bench_summary$task)))
+```
+
+A dashed vertical line on the chart marks the determination
+boundary --- the point where performance drops sharply. Understanding
+this boundary is central to interpreting the benchmark results. The
+10x determination gap means that when the number of candidate glycans
+grows by roughly an order of magnitude (from roughly 1,200 clusters to
+roughly 4,500 families), prediction quality degrades
+disproportionately rather than declining linearly. This is a
+biological reality: fine-grained glycan identity depends on subtle
+enzymatic differences --- variations in branching, linkage position,
+and terminal modification --- that the current feature set cannot
+fully resolve. Tasks to the right of that dashed line are considered
+practically solvable with the current model, while those to the left
+represent open challenges that need additional data sources or
+architectural innovations.
+
+## Comparing Experiments Side by Side
+
+The dashboard provides a multi-select dropdown listing all 33
+available experiments, each named by its configuration string (for
+example, `KG_TransE_dim256_lr1e-3`). Selecting two or more experiments
+populates a side-by-side comparison table with one row per experiment
+and columns for every recorded metric: MRR, Hits@1, Hits@3, Hits@5,
+Hits@10, F1 (macro), Accuracy, Precision, and Recall. This table
+makes it easy to evaluate trade-offs between model architectures,
+embedding dimensions, and learning rates at a glance.
+
+```r
+selected_ids <- input$experiment_selector
+comp_df <- all_results %>%
+  filter(experiment_id %in% selected_ids) %>%
+  select(experiment_id, MRR, `Hits@1`, `Hits@5`,
+         F1, Accuracy, Precision, Recall) %>%
+  arrange(desc(MRR))
+
+DT::datatable(comp_df, options = list(pageLength = 10, scrollX = TRUE))
+```
+
+Sorting by MRR lets you quickly identify the best-performing
+configuration overall. You should then check whether Hits@5 and F1
+agree with that ranking, since divergence between ranking-based and
+classification-based metrics can reveal interesting model behaviour. A
+model that scores well on MRR but poorly on F1 may be good at placing
+the correct answer near the top of the list but unreliable when forced
+to make a hard classification decision. Conversely, high F1 with low
+MRR suggests the model makes correct binary predictions but struggles
+with the ranking task.
+
+## Inspecting Training History
+
+Choosing an experiment from the training-history dropdown reveals two
+panels that together tell the story of how that model learned. The
+left panel plots training loss (blue) and validation loss (orange)
+against epoch number. The point where validation loss levels off or
+begins to increase indicates the optimal stopping epoch. If the gap
+between training and validation loss grows steadily over time, that is
+a clear sign of overfitting --- the model is memorising the training
+set rather than learning generalisable patterns.
+
+The right panel shows validation MRR and Hits@5 at each checkpoint
+epoch, with a vertical grey line marking the epoch that was ultimately
+selected for final evaluation. Together, these curves let you verify
+that training converged cleanly. A well-behaved run shows smooth,
+monotonically improving metric curves that plateau near the checkpoint
+marker, with no oscillation or sudden drops.
+
+```r
+plot_ly(history, x = ~epoch) %>%
+  add_trace(y = ~train_loss, name = "Train loss",
+            line = list(color = "#1f77b4")) %>%
+  add_trace(y = ~val_loss, name = "Val loss",
+            line = list(color = "#ff7f0e")) %>%
+  layout(xaxis = list(title = "Epoch"),
+         yaxis = list(title = "Loss"))
+```
+
+## A Practical Workflow for Finding the Best Model
+
+Start by opening the Benchmark Dashboard tab and reviewing the
+top-level metric cards for a quick summary of the current best
+results. Then scan the hierarchical benchmark table, focusing on the
+task most relevant to your research. If you are interested in glycan
+cluster prediction, for instance, look at the Hits@5 and MRR values
+for that row and note which model type (KG-only or KG+ESM) was used.
+
+Next, select three to five experiments that target your task of
+interest in the comparison dropdown, and sort the resulting table by
+your preferred metric. Once you have identified the top candidate,
+click through to its training history and verify that training
+converged cleanly --- no oscillation, no early divergence, no signs of
+overfitting. Record the winning experiment ID, because you will need
+it when working in the Embedding Explorer or Hierarchy Browser to
+understand what the model actually learned.
+
+## Practical Tips
+
+Metric choice matters more than it might seem at first glance. MRR
+penalises low ranks harshly, making it the right choice when the
+position of the correct answer in a ranked list is critical, whereas
+Hits@5 is more lenient and better suited for classification-oriented
+use cases where you simply need the correct answer to appear somewhere
+in a short-list. Choosing the wrong metric for your application can
+lead you to select a model that performs well by one standard but
+poorly by the one that actually matters.
+
+Every bar and line in the dashboard plots shows exact values on hover,
+so you never need to estimate from axis positions. The DT table
+includes a CSV export button that lets you download comparison results
+for external analysis in Excel, Python, or any other tool. For full
+reproducibility, each experiment ID maps to a configuration YAML in
+`experiments/configs/` that you can load with
+`yaml::read_yaml("experiments/configs/<id>.yaml")` to inspect every
+hyperparameter --- learning rate, embedding dimension, negative
+sampling ratio, and all other settings that produced those results.

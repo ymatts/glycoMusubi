@@ -1,0 +1,154 @@
+# Use Cases and Applications {#use-cases}
+
+glycoMusubi was designed not as an abstract data integration exercise but as a practical resource for answering real research questions. This chapter presents six use cases that span drug discovery, clinical genetics, immunology, structural biology, and biopharmaceutical manufacturing. Each follows a common pattern: define a multi-hop query path through the knowledge graph, traverse the relevant edges, and interpret the results in domain context. Together, they illustrate both the breadth of glycoMusubi's applicability and the current limitations that define opportunities for future development.
+
+## Glycoprotein drug target analysis {#uc-drug-target}
+
+Many therapeutic drug targets are glycoproteins whose glycosylation state directly affects drug binding affinity, receptor signalling, and downstream pharmacology. Given a disease of interest, glycoMusubi can systematically map all glycosylation-related intervention points by traversing from disease nodes through associated proteins, to the glycans decorating those proteins, to the biosynthetic enzymes responsible, and finally to known small-molecule inhibitors of those enzymes. This four-hop path -- disease to protein to glycan to enzyme to compound -- produces a comprehensive map of the glycosylation-mediated druggable space for any disease in the knowledge graph.
+
+```{r uc1, eval=FALSE}
+library(arrow)
+library(dplyr)
+nodes <- read_parquet("../../kg/nodes.parquet")
+edges <- read_parquet("../../kg/edges.parquet")
+
+proteins <- edges %>%
+  filter(target == "Breast cancer", relation == "associated_with_disease") %>%
+  pull(source)
+glycans <- edges %>%
+  filter(source %in% proteins, relation == "has_glycan") %>%
+  pull(target) %>% unique()
+enzymes <- edges %>%
+  filter(target %in% glycans, relation == "catalyzes") %>%
+  pull(source) %>% unique()
+compounds <- edges %>%
+  filter(target %in% enzymes, relation == "inhibits") %>%
+  inner_join(nodes, by = c("source" = "id")) %>%
+  select(compound = source, compound_name = name, enzyme = target)
+cat(length(proteins), "proteins ->", length(glycans), "glycans ->",
+    length(enzymes), "enzymes ->", nrow(compounds), "compounds\n")
+```
+
+The primary limitation of this use case is that disease-protein associations are curated but incomplete, and compound potency data (IC$_{50}$ values from ChEMBL) is not yet stored as edge weights. Incorporating quantitative binding data would enable researchers to prioritise not just which enzymes can be targeted, but which compounds are most potent against them.
+
+## Mutation impact on glycosylation {#uc-mutations}
+
+Missense mutations near glycosylation sites can abolish glycan attachment entirely or alter the glycan repertoire, with significant consequences for protein folding, stability, and function. glycoMusubi supports variant impact analysis by traversing from a variant node to its parent protein, identifying nearby glycosylation sites in sequence space, and retrieving the glycans normally observed at those sites. This three-hop query path -- variant to protein to site to glycan -- enables rapid screening of clinically relevant variants for potential glycosylation disruption.
+
+```{r uc2, eval=FALSE}
+variant_id <- "VAR_012345"
+protein <- edges %>%
+  filter(source == variant_id, relation == "has_variant") %>%
+  pull(target)
+var_pos <- nodes %>% filter(id == variant_id) %>% pull(position)
+
+nearby_sites <- edges %>%
+  filter(source %in% protein, relation == "has_site") %>%
+  inner_join(nodes, by = c("target" = "id")) %>%
+  mutate(pos = as.numeric(gsub(".*::(\\d+)::.*", "\\1", target))) %>%
+  filter(abs(pos - var_pos) <= 5) %>% pull(target)
+
+affected_glycans <- edges %>%
+  filter(source %in% nearby_sites, relation == "has_glycan") %>%
+  inner_join(nodes, by = c("target" = "id")) %>%
+  select(site = source, glycan_id = target, glycan_name = name)
+affected_glycans
+```
+
+The current implementation defines proximity in sequence space, using a window of plus or minus five residues around the variant position. While this captures mutations that directly disrupt the NXS/T sequon, it misses mutations that are distant in sequence but proximal in three-dimensional structure. Incorporating PDB structural data would substantially improve the biological accuracy of this analysis.
+
+## Cell-type glycan repertoire prediction {#uc-celltype}
+
+Different cell types express distinct repertoires of glycosylation enzymes, producing characteristic glycan profiles that are relevant to immunology, cancer biology, and developmental biology. By joining the Tabula Sapiens expression atlas with glycoMusubi enzyme-glycan edges, researchers can estimate the glycan repertoire accessible to any given cell type. The query identifies enzymes expressed above a threshold in the cell type of interest, then retrieves all glycans annotated as products of those enzymes.
+
+```{r uc3, eval=FALSE}
+library(tidyr)
+expr <- read_parquet("../../data_clean/tabula_sapiens_enzyme_expr.parquet")
+active_enzymes <- expr %>%
+  filter(cell_type == "hepatocyte") %>%
+  pivot_longer(-cell_type, names_to = "enzyme", values_to = "expr") %>%
+  filter(expr > 0.5) %>% pull(enzyme)
+
+repertoire <- edges %>%
+  filter(relation == "catalyzes", source %in% active_enzymes) %>%
+  pull(target) %>% unique()
+cat("Hepatocyte: ", length(active_enzymes), " enzymes -> ",
+    length(repertoire), " producible glycans\n")
+```
+
+As established in Chapter \@ref(celltype-analysis), enzyme-glycan annotations cover only 39 percent of N-linked glycans, so the estimated repertoire represents a lower bound on the true set of producible glycans. Despite this limitation, the approach provides a useful starting point for generating hypotheses about cell-type-specific glycosylation patterns, particularly for well-annotated glycan families such as high-mannose structures.
+
+## Glycosyltransferase inhibitor discovery {#uc-inhibitor}
+
+Glycosyltransferase inhibitors serve as both potential therapeutics and chemical biology tools for dissecting glycan function. glycoMusubi enables researchers to map existing inhibitors to their downstream glycan-level impact by traversing from compound to enzyme to glycan. This analysis reveals not just which enzymes a compound inhibits, but how many glycan structures would be affected, providing a measure of the compound's breadth of glycobiological impact.
+
+```{r uc4, eval=FALSE}
+compound_impact <- edges %>%
+  filter(relation == "inhibits") %>%
+  inner_join(nodes, by = c("source" = "id")) %>%
+  rename(compound_name = name) %>%
+  inner_join(
+    edges %>% filter(relation == "catalyzes") %>%
+      select(enzyme = source, glycan = target),
+    by = c("target" = "enzyme")
+  ) %>%
+  group_by(source, compound_name) %>%
+  summarise(n_enzymes = n_distinct(target),
+            n_glycans = n_distinct(glycan), .groups = "drop") %>%
+  arrange(desc(n_glycans))
+head(compound_impact, 15)
+```
+
+Researchers should note that ChEMBL assay quality varies considerably; some entries lack dose-response confirmation, and selectivity across enzyme family members is not modelled in the current knowledge graph. Nonetheless, the query provides a rapid first-pass assessment that can guide experimental follow-up.
+
+## Glycan shield prediction for viral glycoproteins {#uc-shield}
+
+Viral glycoproteins such as the SARS-CoV-2 Spike protein use dense glycan shields to evade immune recognition. Predicting the glycan structures at each site is critical for molecular dynamics simulations, epitope accessibility analysis, and vaccine immunogen design. glycoMusubi stores site-level glycan annotations that can be queried for any glycoprotein in the database, returning the set of observed glycan structures at each position along with the number of structural variants.
+
+```{r uc5, eval=FALSE}
+spike <- "P0DTC2"  # SARS-CoV-2 Spike
+sites <- edges %>%
+  filter(source == spike, relation == "has_site") %>%
+  pull(target)
+site_glycans <- edges %>%
+  filter(source %in% sites, relation == "has_glycan") %>%
+  inner_join(nodes, by = c("target" = "id")) %>%
+  select(site = source, glycan_id = target, glycan_name = name)
+shield <- site_glycans %>%
+  group_by(site) %>%
+  summarise(n_variants = n(), glycans = paste(glycan_id, collapse = "; "))
+shield
+```
+
+An important caveat is that glycan profiles in the database reflect the host-cell expression system used in the original experimental characterisation, which may not match the glycosylation machinery of the actual viral host cell. Furthermore, three-dimensional glycan conformations required for MD simulations must be generated separately using tools such as GLYCAM or CHARMM-GUI; glycoMusubi provides the glycan identities but not their spatial structures.
+
+## Biopharmaceutical glycosylation QC {#uc-biopharma}
+
+Biopharmaceutical manufacturers must ensure consistent glycosylation of therapeutic proteins across production lots, as glycan heterogeneity can affect drug efficacy, safety, and immunogenicity. glycoMusubi provides a reference catalogue of glycans expected at each site of a therapeutic protein, against which observed lot-level glycan profiles can be compared. Glycans present in a production lot but absent from the reference set are flagged as potentially unexpected and warrant further investigation.
+
+```{r uc6, eval=FALSE}
+igg1 <- "P01857"  # IgG1 heavy chain
+reference <- edges %>%
+  filter(source == igg1, relation == "has_glycan") %>%
+  inner_join(nodes, by = c("target" = "id")) %>%
+  select(glycan_id = target, glycan_name = name)
+
+# Compare against observed lot data
+observed <- data.frame(
+  glycan_id = c("G00055MO", "G12345AB", "G99999XX"),
+  abundance = c(0.45, 0.30, 0.05)
+)
+unexpected <- observed %>% filter(!glycan_id %in% reference$glycan_id)
+if (nrow(unexpected) > 0)
+  cat("WARNING:", nrow(unexpected), "unexpected glycan(s)\n")
+```
+
+The current knowledge graph records which glycans can appear at a given site but does not store relative abundance information. Additionally, CHO-cell glycan profiles -- the predominant expression system for biopharmaceuticals -- differ from human glycosylation patterns, so the reference set should be interpreted as a human-derived baseline rather than a CHO-specific expectation.
+
+## Common patterns and performance considerations
+
+All six use cases share a common architectural pattern: define a multi-hop traversal path, filter edges by relation type at each step, and join with the nodes table only when human-readable names or metadata are needed. For best performance on multi-hop queries across the full 2.5 million edges, filtering by `relation` before joining is essential, as it reduces the intermediate result set by orders of magnitude. All queries run against static Parquet files, and researchers should pin the knowledge graph version via `logs/pipeline_report.txt` to ensure reproducibility.
+
+## Summary
+
+These six use cases demonstrate that glycoMusubi serves as a versatile platform for glycobiology research, supporting applications from drug target mapping and clinical variant analysis through immunological repertoire prediction, chemical biology tool assessment, structural virology, and biopharmaceutical quality control. Each use case also highlights specific limitations -- incomplete disease associations, sequence-only proximity, annotation sparsity, variable assay quality, host-cell-dependent profiles, and missing abundance data -- that define concrete directions for future knowledge graph enrichment.

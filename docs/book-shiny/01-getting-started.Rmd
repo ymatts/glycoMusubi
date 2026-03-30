@@ -1,0 +1,110 @@
+# Getting Started {#getting-started}
+
+This chapter walks you through everything you need to install, configure, and launch the glycoMusubi Shiny App for the first time. By the end, you will have the app running in your browser and know how to navigate between its modules.
+
+## Prerequisites
+
+Before you begin, you will need one of two setups depending on your preference. The recommended approach is Docker: you need Docker Engine 24.0 or later with Docker Compose v2, and at least 4 GB of free RAM since the knowledge graph data is loaded into memory at startup. This is the fastest path because it handles all R package dependencies automatically.
+
+If you prefer a local R environment instead, install R 4.3 or later along with the required CRAN packages. You will also need Python 3.9 or above for a one-time data preparation step. The R dependencies cover the web framework, interactive visualisation, and data manipulation:
+
+```r
+install.packages(c(
+  "shiny",      # web framework
+  "bslib",      # Bootstrap 5 theming
+  "DT",         # interactive data tables
+  "plotly",     # interactive charts
+  "visNetwork", # network graph visualisation
+  "dplyr",      # data manipulation
+  "readr",      # fast CSV/TSV reading
+  "jsonlite",   # JSON I/O
+  "arrow",      # Parquet support
+  "tidyr",      # reshaping
+  "stringr"     # string helpers
+))
+```
+
+## Installation with Docker Compose
+
+The simplest way to get started is to clone the repository, change into the app directory, and bring up the container. Docker will build the image, copy pre-processed data into the container, and expose the app on port 3838.
+
+```bash
+git clone https://github.com/<your-org>/glycoMusubi.git
+cd glycoMusubi/shiny_app
+docker compose up -d
+```
+
+Once the container is running, open your browser at `http://localhost:3838`. You can run `docker compose logs -f` in a separate terminal to watch startup progress -- the app is ready once you see *Listening on http://0.0.0.0:3838*.
+
+## Installation with Local R
+
+If you are running without Docker, start by preparing the data. From the repository root, run the Python preparation script, which reads the knowledge graph files under `kg/` and writes Shiny-optimised artefacts into `shiny_app/data/`. These include Parquet files for nodes (78,263 rows), edges (2.5 million rows), pre-computed glycosylation-site predictions, glycan retrieval rankings, and 2-D UMAP projections of node embeddings. The script also generates two JSON files: a glycan subclass hierarchy tree and a KG summary statistics file.
+
+```bash
+cd glycoMusubi
+python3 prepare_shiny_data.py
+```
+
+With the data in place, launch the app from R. It will open automatically in your default browser.
+
+```r
+setwd("glycoMusubi/shiny_app")
+shiny::runApp(port = 3838, launch.browser = TRUE)
+```
+
+## First Launch
+
+When the app opens you land on the Overview tab. At the top of the page, four value boxes display headline numbers for nodes, edges, entity types, and relation types. Below them, two distribution charts show the breakdown of node types and relation types. An About section at the bottom provides a project summary and citation block.
+
+```
+<!-- screenshot placeholder: overview_first_launch.png -->
+<!-- Shows the full Overview tab with four value boxes across the top,
+     node-type bar chart on the left, relation-type bar chart on the right,
+     and the About section at the bottom. -->
+```
+
+## Navigating the App
+
+The top navigation bar contains eight tabs that map to distinct modules. Overview presents KG summary statistics. KG Explorer lets you search and visualise subgraphs. Glycan Predictor shows per-protein glycosylation predictions. Glycan Retrieval ranks candidate glycans for a protein. Cell-type Expression displays enzyme expression across cell types. The remaining three tabs -- Benchmarks, Embedding Explorer, and Hierarchy Browser -- cover model evaluation metrics, 2-D projections of KG embeddings, and the glycan subclass taxonomy respectively.
+
+Clicking any tab label switches to that module, and the sidebar on the left updates to show controls specific to the active module. The browser URL also updates when you switch tabs (for example, `?tab=kg_explorer`), so you can bookmark or share direct links to specific modules.
+
+```
+<!-- screenshot placeholder: navbar_annotated.png -->
+<!-- Annotated screenshot of the top navbar with each tab label highlighted. -->
+```
+
+## Troubleshooting
+
+If port 3838 is already in use, you will see *Error: cannot open connection* or the Docker container will exit immediately. Check what process is occupying the port with `lsof -i :3838`, then either free it or choose a different port. With Docker you can pass an alternative port via the environment variable, and with local R you simply change the `port` argument.
+
+```bash
+# Check what is using the port
+lsof -i :3838
+
+# Use a different port with Docker
+docker compose up -d -e SHINY_PORT=4000
+
+# Or with local R
+shiny::runApp(port = 4000)
+```
+
+A missing `data/` directory inside `shiny_app/` causes errors like *File not found: data/nodes.parquet*. Re-run the preparation script from the repository root to regenerate it.
+
+Loading 2.5 million edges requires roughly 2--3 GB of RAM. If the app crashes silently or the container is killed by the OOM killer, increase the memory limit. In Docker, set the limit in `docker-compose.yml` under `deploy.resources.limits.memory`. On a local machine, close other applications or increase your swap file.
+
+```yaml
+# docker-compose.yml excerpt
+services:
+  shiny:
+    deploy:
+      resources:
+        limits:
+          memory: 6G
+```
+
+The first load typically takes 15--30 seconds while Parquet files are read into memory. Subsequent interactions are fast because data stays in the R session. If startup feels too slow on a laptop, consider reducing the edge set by filtering low-confidence edges in `prepare_shiny_data.py` with the `--min-score` flag.
+
+## Next Steps
+
+Proceed to Chapter \@ref(overview-dashboard) for a detailed walkthrough of the Overview tab, or jump directly to any module chapter that interests you.

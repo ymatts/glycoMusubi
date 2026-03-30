@@ -1,0 +1,259 @@
+# RによるglycoMusubiの操作
+
+```{r setup-ch08, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, eval = FALSE, message = FALSE, warning = FALSE)
+```
+
+## はじめに
+
+glycoMusubiはApache Parquet形式で配布されており、Rの`arrow`パッケージを介して効率的に読み込むことができる。本章では、RユーザーがglycoMusubiを日常の解析ワークフローに組み込むための実践的な手順を解説する。Parquetの読み込みから始まり、基本的なクエリ操作、igraphによるネットワーク解析、可視化、そしてShinyアプリケーションとの連携までを、具体的なコード例とともに散文形式で述べる。
+
+なお、本章のコード例はglycoMusubiのParquetファイルがローカルに配置されていることを前提としている。ファイルの取得方法については第3章を参照されたい。
+
+## Parquetファイルの読み込み
+
+glycoMusubiのデータはノードテーブルとエッジテーブルの2種類のParquetファイルとして提供される。`arrow`パッケージの`read_parquet()`関数を用いれば、これらを`data.frame`（もしくは`tibble`）として直接読み込むことができる。Parquet形式の最大の利点は列指向のストレージ構造にあり、必要な列のみを選択的に読み込むことでメモリ消費を抑えられる点である。
+
+```{r load-parquet}
+library(arrow)
+library(dplyr)
+
+# ノードテーブルの読み込み
+nodes <- read_parquet("glycoMusubi_nodes.parquet")
+
+# エッジテーブルの読み込み
+edges <- read_parquet("glycoMusubi_edges.parquet")
+
+# 大規模データの場合は列を選択して読み込む
+nodes_slim <- read_parquet(
+  "glycoMusubi_nodes.parquet",
+  col_select = c("node_id", "node_type", "name")
+)
+```
+
+ノードテーブルには、タンパク質、糖鎖構造、酵素、疾患、臓器などの各エンティティが行として格納されている。`node_type`列によってエンティティの種類を識別でき、`dplyr`の`filter()`関数と組み合わせることで特定の種類のノードだけを抽出できる。エッジテーブルには、ノード間の関係性が`source`と`target`の対として記録されている。`relation_type`列は関係の種類（has_glycan、catalyzed_by、expressed_inなど）を示す。
+
+## タンパク質の糖鎖検索
+
+もっとも基本的な問い合わせは、特定のタンパク質に付加されている糖鎖構造の検索であろう。これは、エッジテーブルから`has_glycan`関係をフィルタリングし、対象タンパク質のノードIDと結合することで実現できる。
+
+```{r query-protein-glycan}
+# EPOに付加されている糖鎖を検索
+epo_id <- nodes %>%
+  filter(node_type == "protein", name == "EPO") %>%
+  pull(node_id)
+
+epo_glycans <- edges %>%
+  filter(source == epo_id, relation_type == "has_glycan") %>%
+  left_join(nodes, by = c("target" = "node_id")) %>%
+  select(glycan_id = target, glycan_name = name, site = site_position)
+```
+
+上記の例では、エリスロポエチン（EPO）に付加されている糖鎖をすべて取得している。`left_join()`によってエッジテーブルの`target`列とノードテーブルの`node_id`列を結合し、糖鎖の名称情報を付加している。`site_position`列はエッジテーブルの属性として糖鎖修飾部位の位置を保持している。
+
+このパターンを拡張すれば、特定の糖鎖構造がどのタンパク質に出現するかという逆引き検索も容易に実現できる。
+
+```{r query-glycan-proteins}
+# 特定の糖鎖構造を持つタンパク質の検索
+target_glycan <- "G00998GL"
+
+proteins_with_glycan <- edges %>%
+  filter(target == target_glycan, relation_type == "has_glycan") %>%
+  left_join(nodes, by = c("source" = "node_id")) %>%
+  select(protein_id = source, protein_name = name)
+```
+
+## 酵素の検索と経路探索
+
+糖転移酵素の検索は、糖鎖生合成経路の理解に欠かせない操作である。特定の糖鎖構造の合成に関与する酵素群を抽出するには、`catalyzed_by`関係を辿ればよい。
+
+```{r query-enzymes}
+# ある糖鎖構造の合成に関与する酵素を検索
+glycan_id <- "G00998GL"
+
+enzymes_for_glycan <- edges %>%
+  filter(source == glycan_id, relation_type == "catalyzed_by") %>%
+  left_join(nodes, by = c("target" = "node_id")) %>%
+  select(enzyme_id = target, enzyme_name = name, ec_number = ec)
+```
+
+さらに、酵素間の前駆体-産物関係を辿ることで、糖鎖生合成の経路を再構築できる。`precursor_of`関係は、ある糖鎖構造が別の糖鎖構造の前駆体であることを示す。この関係を再帰的に辿ることで、特定の構造に至るまでの生合成ステップを列挙できる。
+
+```{r biosynthetic-path}
+# 生合成経路の再構築
+get_biosynthetic_path <- function(glycan_id, edges, depth = 5) {
+  path <- tibble(
+    step = integer(), source = character(), target = character()
+  )
+  current <- glycan_id
+  for (i in seq_len(depth)) {
+    precursors <- edges %>%
+      filter(target == current, relation_type == "precursor_of")
+    if (nrow(precursors) == 0) break
+    path <- bind_rows(path, tibble(
+      step = i, source = precursors$source, target = current
+    ))
+    current <- precursors$source[1]
+  }
+  path
+}
+```
+
+## igraphによるネットワーク解析
+
+glycoMusubiの真価は、グラフ構造としての関係性情報にある。`igraph`パッケージを用いれば、ノードテーブルとエッジテーブルから直接グラフオブジェクトを構築し、ネットワーク解析の豊富なツール群を利用できる。
+
+```{r igraph-construction}
+library(igraph)
+
+# グラフオブジェクトの構築
+g <- graph_from_data_frame(
+  d = edges %>% select(from = source, to = target, relation_type),
+  directed = TRUE,
+  vertices = nodes %>% select(name = node_id, node_type, label = name)
+)
+```
+
+グラフが構築されれば、中心性指標の計算、コミュニティ検出、最短経路探索といったigraphの標準的な機能がすべて利用可能となる。たとえば、糖鎖構造ノードの次数（degree）を計算すれば、もっとも多くのタンパク質に出現する糖鎖構造を特定できる。
+
+```{r degree-analysis}
+# 糖鎖ノードの次数分析
+glycan_nodes <- V(g)[V(g)$node_type == "glycan"]
+glycan_degrees <- degree(g, v = glycan_nodes, mode = "in")
+top_glycans <- sort(glycan_degrees, decreasing = TRUE)[1:20]
+```
+
+媒介中心性（betweenness centrality）の計算は、異なるタンパク質群を結びつける「ハブ糖鎖」の同定に有用である。PageRankアルゴリズムを適用すれば、グラフ全体の構造を考慮した重要度スコアが得られる。
+
+## サブグラフの抽出
+
+全体グラフは数十万のノードと数百万のエッジを含むため、特定の問いに答えるにはサブグラフの抽出が有効である。たとえば、特定のタンパク質を中心とした局所ネットワーク（egoネットワーク）を抽出することで、そのタンパク質の糖鎖修飾に関連するすべてのエンティティを俯瞰できる。
+
+```{r subgraph-extraction}
+# タンパク質中心のegoネットワーク抽出
+protein_vertex <- V(g)[V(g)$label == "EPO"]
+ego_subgraph <- make_ego_graph(g, order = 2, nodes = protein_vertex)[[1]]
+```
+
+`order = 2`は、中心ノードから2ステップ以内のすべてのノードとエッジを含めることを意味する。この距離設定により、タンパク質から糖鎖を経由して酵素に至る経路が捕捉される。より広い文脈が必要な場合は`order`を増やせばよいが、ノード数が指数的に増加するため、3以上の値には注意が必要である。
+
+特定の関係性のみに着目したサブグラフの抽出も有用である。たとえば、`catalyzed_by`関係のみで構成されるサブグラフを作成すれば、糖鎖-酵素間の二部グラフが得られる。
+
+```{r bipartite-subgraph}
+# 糖鎖-酵素の二部グラフ
+catalysis_edges <- E(g)[E(g)$relation_type == "catalyzed_by"]
+catalysis_graph <- subgraph.edges(g, catalysis_edges)
+```
+
+## 外部データとの結合
+
+glycoMusubiの価値は、外部データソースとの結合によってさらに高まる。UniProtのアノテーション、Gene Ontology、疾患データベースなどとの結合は、ノードIDを介して容易に実現できる。glycoMusubiのタンパク質ノードにはUniProt accession番号が付与されているため、UniProtの任意のデータとの結合が可能である。
+
+```{r external-join}
+# UniProtアノテーションとの結合例
+uniprot_annotations <- read_tsv("uniprot_human_annotations.tsv")
+
+enriched_nodes <- nodes %>%
+  filter(node_type == "protein") %>%
+  left_join(uniprot_annotations, by = c("uniprot_ac" = "Entry"))
+```
+
+Gene Ontologyのエンリッチメント解析との組み合わせは、特に有用な応用パターンである。特定の糖鎖構造を共有するタンパク質群に対してGOエンリッチメント解析を実施すれば、その糖鎖構造と関連する生物学的プロセスを同定できる。`clusterProfiler`パッケージとの連携により、この解析はわずか数行のコードで実現できる。
+
+```{r go-enrichment}
+library(clusterProfiler)
+library(org.Hs.eg.db)
+
+# 特定の糖鎖を共有するタンパク質群のGOエンリッチメント
+protein_genes <- enriched_nodes %>%
+  filter(node_id %in% proteins_with_glycan$protein_id) %>%
+  pull(gene_name)
+
+go_result <- enrichGO(
+  gene = protein_genes,
+  OrgDb = org.Hs.eg.db,
+  keyType = "SYMBOL",
+  ont = "BP"
+)
+```
+
+## visNetworkによる対話的可視化
+
+グラフの可視化には、`visNetwork`パッケージが優れた対話的インターフェースを提供する。visNetworkはvis.jsライブラリのRラッパーであり、ブラウザ上でノードのドラッグ、ズーム、ホバー情報の表示などが可能な動的なネットワーク図を生成する。
+
+```{r visnetwork}
+library(visNetwork)
+
+# サブグラフをvisNetwork形式に変換
+vis_nodes <- data.frame(
+  id = V(ego_subgraph)$name,
+  label = V(ego_subgraph)$label,
+  group = V(ego_subgraph)$node_type
+)
+
+vis_edges <- as_data_frame(ego_subgraph, what = "edges") %>%
+  select(from, to, label = relation_type)
+
+visNetwork(vis_nodes, vis_edges) %>%
+  visGroups(groupname = "protein", color = "#E8575A") %>%
+  visGroups(groupname = "glycan", color = "#5B9BD5") %>%
+  visGroups(groupname = "enzyme", color = "#70AD47") %>%
+  visOptions(highlightNearest = TRUE, nodesIdSelection = TRUE) %>%
+  visLayout(randomSeed = 42)
+```
+
+ノードの色はエンティティ型によって分けており、タンパク質を赤、糖鎖を青、酵素を緑としている。`highlightNearest`オプションにより、ノードをクリックすると直接接続されたノードがハイライトされ、局所的な関係性を直感的に把握できる。
+
+大規模なグラフの場合は、visNetworkの描画性能に限界があるため、先にサブグラフを抽出してから可視化することを推奨する。数百ノードまでであれば快適に動作するが、数千ノードを超えるとブラウザの応答が遅くなる。
+
+## Shinyアプリケーションとの連携
+
+glycoMusubiプロジェクトでは、インタラクティブな探索を支援するShinyアプリケーションを提供している。このアプリケーションは、本章で解説したクエリ操作とvisNetworkによる可視化を統合し、プログラミングの知識がなくてもglycoMusubiを探索できる環境を提供する。
+
+自身のShinyアプリケーションにglycoMusubiの機能を組み込む場合は、`arrow`パッケージによるParquetの読み込みをサーバー起動時に一度だけ実行し、以降のクエリは`dplyr`のフィルタリングで処理するアーキテクチャが推奨される。Parquetの列指向ストレージは、特定の列のみを参照するフィルタリング操作において極めて効率的であり、数十万行のテーブルに対してもミリ秒単位の応答が得られる。
+
+```{r shiny-integration}
+library(shiny)
+
+# Shinyアプリでのデータ読み込みパターン
+# global.Rに配置
+nodes <- read_parquet("glycoMusubi_nodes.parquet")
+edges <- read_parquet("glycoMusubi_edges.parquet")
+
+# server.Rでのリアクティブなクエリ
+server <- function(input, output, session) {
+  selected_glycans <- reactive({
+    req(input$protein_name)
+    protein_id <- nodes %>%
+      filter(node_type == "protein", name == input$protein_name) %>%
+      pull(node_id)
+    edges %>%
+      filter(source == protein_id, relation_type == "has_glycan") %>%
+      left_join(nodes, by = c("target" = "node_id"))
+  })
+
+  output$glycan_network <- renderVisNetwork({
+    # visNetwork描画コード
+  })
+}
+```
+
+## パフォーマンスに関する補足
+
+glycoMusubiの全データをメモリに読み込んだ場合、ノードテーブルとエッジテーブルを合わせて数GBのメモリを消費する。メモリが制約となる環境では、`arrow`パッケージのdataset APIを用いたout-of-coreクエリが有効である。この方式では、Parquetファイルを直接ディスクからクエリし、結果のみをメモリに読み込むため、メモリ消費を大幅に削減できる。
+
+```{r arrow-dataset}
+# Out-of-coreクエリ
+ds <- open_dataset("glycoMusubi_edges.parquet")
+
+result <- ds %>%
+  filter(relation_type == "has_glycan") %>%
+  select(source, target) %>%
+  collect()
+```
+
+`open_dataset()`は実際にはデータを読み込まず、メタデータのみを取得する。`filter()`や`select()`もlazy evaluationで処理され、`collect()`が呼ばれた時点で初めてデータがメモリに読み込まれる。この遅延評価の仕組みにより、数十億行のデータに対してもメモリ効率の良いクエリが可能となる。
+
+## 本章のまとめ
+
+本章では、RによるglycoMusubiの実践的な操作方法を解説した。`arrow`パッケージによるParquet読み込み、`dplyr`によるクエリ操作、`igraph`によるネットワーク解析、`visNetwork`による対話的可視化、そしてShinyアプリケーションとの連携という一連のワークフローを提示した。これらのツールを組み合わせることで、糖鎖生物学の研究者は、プログラミングの高度な知識がなくとも、glycoMusubiの豊富な情報を自身の研究に活用できる。

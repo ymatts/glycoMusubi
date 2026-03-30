@@ -1,0 +1,201 @@
+# Deployment Guide {#deployment}
+
+## Running Locally for Development
+
+The fastest way to get the glycoMusubi Shiny app running is on your own
+machine. Install the required R packages and launch the app on port
+3838:
+
+```r
+install.packages(c("shiny", "bslib", "DT", "plotly", "visNetwork",
+                    "arrow", "data.table", "shinycssloaders", "shinyWidgets"))
+shiny::runApp("shiny_app/", port = 3838)
+```
+
+Before launching, you need to tell `global.R` where the data lives by
+setting three environment variables. `GLYCOKG_KG_DIR` points to the
+knowledge graph parquet and edge files (defaulting to `../data/kg` if
+unset), `GLYCOKG_DATA_DIR` points to the processed annotation tables
+(defaulting to `../data/processed`), and `GLYCOKG_EXP_DIR` points to
+experiment results and embeddings (defaulting to
+`../data/experiments`). Export them in your shell session before
+starting the app:
+
+```bash
+export GLYCOKG_KG_DIR=/path/to/kg_data
+export GLYCOKG_DATA_DIR=/path/to/processed_data
+export GLYCOKG_EXP_DIR=/path/to/experiments
+```
+
+Inside `global.R`, these are read with fallback defaults so the app
+can start even without explicit configuration:
+
+```r
+kg_dir   <- Sys.getenv("GLYCOKG_KG_DIR",  unset = "../data/kg")
+data_dir <- Sys.getenv("GLYCOKG_DATA_DIR", unset = "../data/processed")
+exp_dir  <- Sys.getenv("GLYCOKG_EXP_DIR",  unset = "../data/experiments")
+```
+
+## Deploying with Docker
+
+For reproducible, isolated deployment, Docker is the recommended
+approach. The Dockerfile starts from the `rocker/shiny-verse:4.4.1`
+base image, installs system dependencies and the required R packages,
+copies the app code into the Shiny Server directory, and exposes port
+3838:
+
+```dockerfile
+FROM rocker/shiny-verse:4.4.1
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libcurl4-openssl-dev libssl-dev libxml2-dev libglpk-dev cmake \
+    && rm -rf /var/lib/apt/lists/*
+RUN install2.r --error --skipinstalled \
+    bslib DT plotly visNetwork arrow data.table shinycssloaders shinyWidgets
+COPY shiny_app/ /srv/shiny-server/glycokg/
+EXPOSE 3838
+CMD ["/usr/bin/shiny-server"]
+```
+
+The accompanying `docker-compose.yml` wires up the data volumes as
+read-only mounts, passes the environment variables, limits memory to
+4 GB, and configures automatic restarts:
+
+```yaml
+version: "3.9"
+services:
+  glycokg-app:
+    build: .
+    ports:
+      - "3838:3838"
+    volumes:
+      - ./data/kg:/srv/data/kg:ro
+      - ./data/processed:/srv/data/processed:ro
+      - ./data/experiments:/srv/data/experiments:ro
+    environment:
+      - GLYCOKG_KG_DIR=/srv/data/kg
+      - GLYCOKG_DATA_DIR=/srv/data/processed
+      - GLYCOKG_EXP_DIR=/srv/data/experiments
+    restart: unless-stopped
+    mem_limit: 4g
+```
+
+Building and running is straightforward. Use `docker compose build`
+to create the image (add `--no-cache` for a clean rebuild),
+`docker compose up -d` to start in detached mode, `docker compose
+down` to stop, and `docker compose logs -f` to stream live logs.
+
+```bash
+docker compose build
+docker compose up -d
+docker compose logs -f
+```
+
+## Deploying to shinyapps.io
+
+The shinyapps.io free tier imposes a 1 GB storage limit, and the full
+dataset with embeddings weighs roughly 12 GB, so a reduced bundle is
+necessary. The parquet-only dataset (roughly 250 MB) fits comfortably.
+Deploy with a single command:
+
+```r
+rsconnect::deployApp(appDir = "shiny_app/", appName = "glycoMusubi")
+```
+
+To slim down the bundle, ship only parquet files, subset experiments
+to the most important configurations, and create an
+`.rsconnectignore` file to exclude large directories:
+
+```text
+data/experiments/embeddings/
+data/raw/
+*.rds
+```
+
+## University Server Deployment
+
+University environments typically require user isolation and
+institutional authentication. ShinyProxy addresses both by launching a
+fresh Docker container per user session. The `application.yml`
+configuration specifies the container image, data volume mounts, and
+LDAP authentication against the university directory:
+
+```yaml
+proxy:
+  title: glycoMusubi
+  port: 8080
+  authentication: ldap
+  ldap:
+    url: ldap://ldap.example.edu:389/dc=example,dc=edu
+    user-search-filter: (uid={0})
+  specs:
+    - id: glycokg
+      container-image: glycokg-app:latest
+      container-volumes:
+        - /data/glycokg/kg:/srv/data/kg:ro
+        - /data/glycokg/processed:/srv/data/processed:ro
+```
+
+For HTTPS, place an Nginx reverse proxy in front of ShinyProxy with a
+Let's Encrypt certificate. The key configuration details are WebSocket
+upgrade support (required by Shiny) and a generous read timeout to
+accommodate long-running computations:
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name glycokg.example.edu;
+    ssl_certificate     /etc/letsencrypt/live/glycokg.example.edu/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/glycokg.example.edu/privkey.pem;
+    location / {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_read_timeout 600s;
+    }
+}
+```
+
+Generate the certificate with
+`sudo certbot --nginx -d glycokg.example.edu`. If ShinyProxy's LDAP
+integration is not available, the `shinymanager` package adds a login
+page directly to the app with
+`ui <- shinymanager::secure_app(ui, enable_admin = TRUE)`.
+
+## Performance Tuning
+
+Three areas deserve attention when scaling the app. For memory
+management, use Arrow's lazy loading to avoid reading entire parquet
+files into memory, and rely on `data.table` for large in-memory
+joins:
+
+```r
+nodes <- arrow::open_dataset(file.path(kg_dir, "nodes.parquet"))
+edges <- arrow::open_dataset(file.path(kg_dir, "edges.parquet"))
+```
+
+For concurrency, remember that a single R process handles one user at
+a time. You can scale horizontally with ShinyProxy (one container per
+user), Shiny Server Pro workers, or
+`docker compose up --scale glycokg-app=3` behind a load balancer.
+
+For caching, wrap expensive reactives with `bindCache()` so repeated
+queries with identical inputs are served from cache rather than
+recomputed:
+
+```r
+filtered_data <- reactive({
+  nodes |> dplyr::filter(type == input$node_type) |> dplyr::collect()
+}) |> bindCache(input$node_type)
+```
+
+## Monitoring the Running App
+
+Keep an eye on the app in production using Docker's built-in tooling.
+`docker stats glycokg-app` shows live CPU and memory usage,
+`docker compose logs -f --tail=100` streams the most recent
+application logs, and you can inspect Shiny Server's own logs with
+`docker exec -it glycokg-app tail -f /var/log/shiny-server/*.log`.
+Watch for "Connection closed" warnings, which often signal
+insufficient memory, and slow render times in the log output, which
+suggest a need for caching or data subsetting.

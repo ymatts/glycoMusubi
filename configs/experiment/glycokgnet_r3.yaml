@@ -1,0 +1,48 @@
+# Round 3: GlycoKGNet + multi-negative sampling (K=32)
+# Incremental over R1: add multi-neg + cosine scheduler + weight decay
+# BioHGT disabled (torch-sparse unavailable in Docker)
+# Target: MRR > 0.474 (beat TransE 400ep baseline)
+name: glycokgnet_r3
+seed: 42
+embedding_dim: 256
+
+model:
+  name: GlycoKGNet
+  embedding_dim: 256
+  # Encoders: learnable (no external features)
+  glycan_encoder_type: learnable
+  protein_encoder_type: learnable
+  # BioHGT disabled (torch-sparse unavailable)
+  num_hgt_layers: 0
+  num_hgt_heads: 8
+  use_bio_prior: false
+  # Cross-modal fusion
+  use_cross_modal_fusion: true
+  num_fusion_heads: 4
+  # Hybrid decoder (DistMult + RotatE + Neural + Poincaré)
+  decoder_type: hybrid
+  dropout: 0.1
+  # Loss
+  loss_fn: margin
+  margin: 1.0
+
+training:
+  epochs: 400
+  batch_size: 1024
+  lr: 1.0e-3
+  weight_decay: 1.0e-5
+  optimizer: adam
+  scheduler: cosine
+  grad_clip: 1.0
+  early_stopping_patience: 40
+  eval_every: 10
+  relation_balance_alpha: 0.3
+  relation_balance_max_weight: 5.0
+  max_edges_per_type: 150000
+  num_negatives: 32
+
+tags:
+  - glycokgnet
+  - round3
+  - multi_negative
+  - margin_loss

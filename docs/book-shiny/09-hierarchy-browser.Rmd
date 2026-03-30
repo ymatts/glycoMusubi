@@ -1,0 +1,216 @@
+# Hierarchy Browser {#hierarchy-browser}
+
+## Navigating a Massive Glycan Tree
+
+The Hierarchy Browser lets you navigate the glycan structural
+hierarchy --- a directed tree of subsumption relationships that
+encodes which glycan structures are specialisations of which. With
+58,628 glycan nodes connected by over 1.06 million edges, the full
+graph is far too large to visualise at once or even to load into a
+single network layout. This module solves that problem by letting you
+explore one neighbourhood at a time through breadth-first search
+traversals rooted at any glycan of your choosing. The result is a
+focused, interactive subgraph that reveals local structure without
+overwhelming you with the global complexity.
+
+## Understanding Structural Subsumption
+
+The hierarchy rests on the concept of structural subsumption, also
+called structural containment. When we say parent_of(A, B), we mean
+that glycan B's structure contains all of A's monosaccharide residues
+and linkages, plus additional ones. A is a more general motif; B is a
+more specific, more decorated structure. The inverse relation,
+child_of(B, A), simply states that B is a specialisation of A. This
+is not a classification taxonomy in the traditional sense --- it is a
+lattice of structural inclusion, where each edge represents a
+concrete chemical elaboration.
+
+To make this concrete, consider the core pentasaccharide Man3GlcNAc2.
+It is a parent of every complex-type N-glycan that extends it with
+additional antennae, terminal sugars, and modifications. Each step
+down the tree adds specific chemical detail:
+
+```
+Man3GlcNAc2  (parent)
+ ├── Man3GlcNAc2·GlcNAc  (child, one antenna added)
+ │    ├── Man3GlcNAc2·GlcNAc·Gal  (grandchild)
+ │    │    └── Man3GlcNAc2·GlcNAc·Gal·Sia  (great-grandchild)
+ │    └── ...
+ ├── Man3GlcNAc2·GlcNAc·GlcNAc  (child, two antennae)
+ └── ...
+```
+
+This tree structure is a key ingredient for the hierarchical
+prediction tasks described in the Benchmark Dashboard
+(Chapter \@ref(benchmarks)). The coarser tasks (superclass, class)
+correspond to predictions high in this tree, where structures share
+more commonality, while the finer tasks (family, exact ID) correspond
+to predictions deep in the tree where structures diverge along many
+possible branches.
+
+## Setting Up a Traversal
+
+The sidebar provides three controls that define each traversal. The
+"Root Glycan ID" text input accepts a GlyTouCan accession (for
+example, `G00051MO`) as the starting point for a breadth-first search.
+If you do not know the accession, you can look it up on
+[GlyTouCan](https://glytoucan.org/) or copy an ID from the Embedding
+Explorer's hover labels. The module will validate the ID and display
+an error message if it does not exist in the hierarchy graph.
+
+The "Relation Type" radio button sets the traversal direction.
+Choosing "parent_of" traverses downward from the root to its children,
+showing structures that extend the root by adding chemical detail.
+Choosing "child_of" traverses upward from the root to its parents,
+revealing the more general motifs that the root elaborates upon. The
+direction you choose depends on your question: downward exploration
+answers "what more complex structures contain this motif?" while
+upward exploration answers "what simpler motifs does this structure
+build upon?"
+
+The "Max Depth" slider, ranging from 1 to 5, limits how many hops the
+BFS follows from the root. Because the hierarchy can branch
+widely --- the average branching factor is roughly 4.2 --- keeping
+depth at 2 or 3 is recommended for initial exploration. At depth 3
+with a branching factor of 4, you could see up to 64 leaf nodes plus
+all their ancestors, which is a manageable subgraph. Going to depth 5
+could produce thousands of nodes and slow down the visualisation.
+
+The traversal itself is a straightforward BFS that expands the
+frontier one level at a time, tracking which nodes have been visited
+and at what depth they were discovered:
+
+```r
+bfs_tree <- function(edges, root, max_depth, relation) {
+  visited <- root
+  frontier <- root
+  depth_map <- setNames(0L, root)
+
+  for (d in seq_len(max_depth)) {
+    if (relation == "parent_of") {
+      next_nodes <- edges$child[edges$parent %in% frontier]
+    } else {
+      next_nodes <- edges$parent[edges$child %in% frontier]
+    }
+    next_nodes <- setdiff(next_nodes, visited)
+    if (length(next_nodes) == 0) break
+    depth_map[next_nodes] <- d
+    visited <- c(visited, next_nodes)
+    frontier <- next_nodes
+  }
+  return(depth_map)
+}
+```
+
+## The Interactive Tree Visualisation
+
+The main panel renders the BFS result as an interactive network graph
+using the visNetwork package with a top-down hierarchical layout. The
+root node appears as a larger circle with a bold border, making it
+easy to identify the starting point of your traversal. All other nodes
+are coloured on a blue gradient by depth: depth 0 (the root) is dark
+navy and depth 5 is light sky blue, so you can read the tree's
+structure at a glance even before examining labels. Arrows point from
+parent to child, encoding the direction of structural elaboration.
+
+```r
+visNetwork(nodes, edges) %>%
+  visHierarchicalLayout(direction = "UD",
+                        sortMethod = "directed") %>%
+  visOptions(highlightNearest = TRUE,
+             nodesIdSelection = TRUE) %>%
+  visInteraction(navigationButtons = TRUE)
+```
+
+The graph is fully interactive. Clicking a node selects it and
+highlights its immediate neighbours, which is particularly useful for
+tracing a single lineage through the tree. You can drag nodes to
+rearrange the layout manually when the automatic positioning creates
+overlaps. Scrolling zooms in and out, and navigation buttons in the
+bottom-left corner provide fit-to-screen and directional panning. The
+`nodesIdSelection` option adds a dropdown that lets you jump directly
+to any node by its GlyTouCan ID, which is faster than scrolling
+through a large tree.
+
+## The Subtree Table
+
+Below the network graph, a sortable data table lists every node in
+the current BFS result. Each row shows the GlyTouCan accession
+(rendered as a clickable link that opens the GlyTouCan entry in a new
+tab), the depth from the root, and the number of direct children and
+parents that node has in the full hierarchy. This count information is
+valuable because it tells you how much further the tree extends beyond
+the displayed subgraph --- a node with 50 children at the edge of
+your traversal is a promising candidate for deeper exploration.
+
+```r
+DT::datatable(
+  subtree_df,
+  options = list(pageLength = 25, order = list(list(1, "asc"))),
+  rownames = FALSE,
+  escape = FALSE
+)
+```
+
+The table is sorted by depth by default, which gives you a
+level-by-level view of the subgraph. You can re-sort by children
+count to find the most-branching nodes, or use the search box to
+locate a specific accession.
+
+## Three Ways to Explore
+
+The most natural starting point is a downward exploration from a core
+structure. Enter a core structure ID (such as the accession for
+Man3GlcNAc2) in the root input, set the relation to "parent_of" with
+max depth 3, and click "Update". The first level of the tree adds one
+antenna, the second adds terminal sugars, and the third adds
+sialylation or fucosylation. Clicking an interesting leaf node reveals
+its ID, which you can paste into the Embedding Explorer
+(Chapter \@ref(embedding-explorer)) to see where it falls in UMAP
+space.
+
+For the reverse perspective, enter a highly decorated glycan ID, set
+the relation to "child_of" with max depth 4, and trace the path
+upward. The tree converges toward increasingly general motifs, and the
+broadest parent structure you reach is the glycan's structural class
+anchor in the hierarchy. This upward view is especially useful for
+understanding why a model might confuse two glycans --- if they share
+a common parent at depth 2, their structures overlap substantially.
+
+A third approach focuses on comparing siblings. Perform a downward
+traversal from a shared parent at depth 1 and examine the sibling
+nodes, which represent alternative extensions of the parent motif. You
+can then check whether siblings appear in the same UMAP cluster or in
+different ones, revealing whether the embedding model captures the
+structural branching that the hierarchy encodes.
+
+## Scale and Performance
+
+The full hierarchy graph contains 58,628 glycan nodes, over 1,060,000
+edges, a maximum observed depth of 12, and an average branching factor
+of roughly 4.2. The module never loads the entire graph into the
+visualisation --- the BFS traversal and depth limit ensure that only a
+manageable subgraph is rendered. That said, if the BFS returns more
+than roughly 500 nodes, the visNetwork graph may slow down noticeably,
+particularly on machines without dedicated graphics hardware. Reducing
+depth by one level or picking a more specific root usually brings the
+node count back into a comfortable range.
+
+## Practical Tips for Effective Browsing
+
+Start shallow, at max depth 1 or 2, to orient yourself before
+increasing depth. This lets you understand the local neighbourhood
+before committing to a larger traversal. Right-clicking a node label
+lets you copy the glycan accession for use in other modules or
+external databases. The app supports Shiny bookmarking, so after
+setting up an interesting view you can click "Bookmark" in the browser
+to save the exact state --- root, relation, and depth --- as a
+shareable URL. This is particularly useful when collaborating with
+colleagues who want to see the same subgraph.
+
+Finally, use the hierarchy depth of a glycan (from the subtree table)
+alongside the Benchmark Dashboard (Chapter \@ref(benchmarks)) to
+understand why prediction accuracy varies across hierarchical levels.
+A glycan deep in the tree has many close structural neighbours, making
+it harder to distinguish, which is exactly why the determination gap
+described in the benchmark chapter exists.

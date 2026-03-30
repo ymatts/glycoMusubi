@@ -1,0 +1,23 @@
+---
+title: "glycoMusubi Shiny アプリガイド"
+author: "松井 悠輔"
+date: "`r Sys.Date()`"
+site: bookdown::bookdown_site
+documentclass: book
+link-citations: yes
+description: "glycoMusubiインタラクティブWebアプリケーションのユーザーガイド。7つのモジュール、デプロイオプション、拡張パターンを解説。"
+---
+
+# まえがき {-}
+
+本書は **glycoMusubi Shiny App** の公式ユーザーガイドです。glycoMusubiナレッジグラフの探索、糖鎖予測の実行、糖鎖修飾酵素の発現解析を行うためのインタラクティブWebアプリケーションの使い方を解説します。
+
+[English version](../book-shiny/_book/index.html){target="_blank"}
+
+## クイックスタート {-}
+
+```bash
+cd glycoMusubi/shiny_app
+docker compose up -d
+# ブラウザで http://localhost:3838 を開く
+```

@@ -1,0 +1,41 @@
+---
+title: "glycoMusubi: Vignettes & Technical Guide"
+author: "Yusuke Matsui"
+date: "`r Sys.Date()`"
+site: bookdown::bookdown_site
+documentclass: book
+bibliography: references.bib
+biblio-style: apalike
+link-citations: yes
+description: "Comprehensive technical guide for the glycoMusubi knowledge graph, embedding models, and hierarchical glycan prediction benchmark."
+---
+
+# Preface {-}
+
+[日本語版はこちら](../book-vignette-ja/_book/index.html){target="_blank"}
+
+This book provides a comprehensive guide to **glycoMusubi**, an integrated knowledge graph for glycobiology research. It covers the biological foundations, computational methods, and practical workflows for using glycoMusubi in research.
+
+## Who is this book for? {-}
+
+- **Glycobiologists** seeking computational tools for glycan prediction
+- **Bioinformaticians** building knowledge graph pipelines
+- **Machine learning researchers** working on biomedical KG embeddings
+- **Students** learning about glycosylation and knowledge graphs
+
+## Book structure {-}
+
+| Part | Chapters | Content |
+|------|----------|---------|
+| **Foundations** | 1--2 | Glycobiology primer and KG concepts |
+| **Architecture** | 3--5 | glycoMusubi design, ETL pipeline, and embedding models |
+| **Benchmarks** | 6--7 | Hierarchical prediction and cell-type analysis |
+| **Practice** | 8--9 | R workflows, use cases, and applications |
+
+## How to cite {-}
+
+> Matsui Y. (2026) Hierarchical glycan prediction from protein sequence reveals a determination boundary at the structural-class level. *Bioinformatics*.
+
+## Source code {-}
+
+All code is available at <https://github.com/ymatts/glycoMusubi>.

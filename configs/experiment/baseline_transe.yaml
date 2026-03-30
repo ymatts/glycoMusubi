@@ -1,0 +1,21 @@
+# Baseline TransE experiment
+name: baseline_transe
+seed: 42
+embedding_dim: 256
+
+model:
+  name: TransE
+  embedding_dim: 256
+  margin: 1.0
+  p_norm: 2
+
+training:
+  epochs: 200
+  batch_size: 1024
+  lr: 1.0e-3
+  early_stopping_patience: 20
+  eval_every: 10
+
+tags:
+  - baseline
+  - transe

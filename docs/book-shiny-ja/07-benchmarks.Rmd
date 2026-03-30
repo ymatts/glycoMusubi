@@ -1,0 +1,85 @@
+# ベンチマークダッシュボード {#benchmarks}
+
+## ダッシュボードが伝えること
+
+ベンチマークダッシュボードは、glycoMusubiモデルパイプラインが異なる粒度で糖鎖構造をどれほど正確に予測できるかを一望するための中核モジュールです。6段階の階層的予測タスクにまたがる33件の実験結果を、フィルタ可能なテーブル、インタラクティブなチャート、訓練履歴プロットとして集約しています。ログファイルやスプレッドシートを掘り返す必要はありません。ブラウザの中だけでモデル性能を評価・比較できます。
+
+モジュールを開くと、ページ上部に4枚のサマリーカードが表示されます。最初のカードに示されるF1 (macro) = 0.924は、全クラスにわたるprecisionとrecallの調和平均であり、分類品質の全体像をバランスよく伝えます。次のHits@5 = 0.786は、正解がモデルの上位5予測に含まれる割合を示し、検索的なワークフローで特に重要な指標です。3番目のMRR (mean reciprocal rank) = 0.066は、全テストクエリにおける正解の平均順位の逆数であり、低いランクを厳しく罰します。最後のdetermination gap = 10xは、クラスタレベルのタスクと正確なID予測タスクの間の性能比を数値化したもので、モデルが「強い予測」から「弱い予測」へ移行する境界を明示します。これらの数値は最良のモデル構成に対応しており、新しい実験結果がデータディレクトリに追加されると自動で更新されます。
+
+## 6タスク階層表
+
+サマリーカードの下には、6つの階層タスク別に性能を分解したソート可能・ページ送り可能なテーブルが配置されています。
+
+最も粗い粒度であるglycan superclass予測（候補数約15）では、ナレッジグラフのみで accuracy 0.97、F1 0.96を達成します。glycan class予測（候補数約80）もaccuracy 0.94、F1 0.93とほぼ同水準です。glycan subclass（候補数約250）になるとESMタンパク質埋め込みをKGと併用し始め、F1 0.92、precision 0.93、recall 0.91という結果を示します。
+
+遷移が鮮明になるのはclusterレベルです。候補数が約1,200に膨れ、主要指標はHits@5 = 0.79、MRR = 0.34へ切り替わります。familyレベル（候補数約4,500）ではHits@5が0.41、MRRが0.09へ低下します。最も挑戦的なexact glycan ID予測（候補数約58,000）では、Hits@5が0.08、MRRが0.02にとどまります。
+
+| タスク | 候補数 | 主要指標 | 値 |
+|--------|--------|----------|-----|
+| Superclass | ~15 | F1 | 0.96 |
+| Class | ~80 | F1 | 0.93 |
+| Subclass | ~250 | F1 | 0.92 |
+| Cluster | ~1,200 | Hits@5 | 0.79 |
+| Family | ~4,500 | Hits@5 | 0.41 |
+| Exact ID | ~58,000 | Hits@5 | 0.08 |
+
+テーブルの列ヘッダをクリックすればソートでき、上部の検索ボックスでタスク名やモデル種別によるフィルタも可能です。
+
+## 性能棒グラフとdetermination boundary
+
+水平棒グラフが6タスクそれぞれの主要指標を可視化します。棒はdetermination boundaryより上のタスク（clusterレベル以上）を緑、下のタスク（familyとexact ID）をオレンジに色分けしています。グラフはplotlyで構築されているため、ホバーで正確な値を読めますし、ズームやパンも自由です。
+
+```r
+plotly::plot_ly(
+  data = bench_summary,
+  x = ~value, y = ~task,
+  type = "bar", orientation = "h",
+  color = ~above_boundary,
+  colors = c("above" = "#2ca02c", "below" = "#ff7f0e")
+) %>%
+  layout(yaxis = list(categoryorder = "array",
+                      categoryarray = rev(bench_summary$task)))
+```
+
+グラフ上の破線がdetermination boundaryを示しています。10xのdetermination gapとは、候補糖鎖の数がおよそ一桁増える（約1,200クラスタから約4,500ファミリーへ）と、予測品質が不釣り合いに劣化する現象を指します。これは生物学的現実を反映しています。微細な糖鎖同一性は、微妙な酵素活性の差異に依存しており、現在の特徴量セットではそれを十分に解像できません。破線の右側のタスクは現行モデルで実用的に解けると見なせますが、左側のタスクにはさらなる方法論的改善が必要です。
+
+## 実験比較機能
+
+ダッシュボードには、利用可能な33件の実験すべてを列挙するマルチセレクトドロップダウンが備わっています。実験名は構成を反映した命名（例えば `KG_TransE_dim256_lr1e-3`）です。2件以上を選択すると、実験ごとに1行、記録された全指標（MRR、Hits@1、Hits@3、Hits@5、Hits@10、F1 macro、Accuracy、Precision、Recall）を列にした並列比較テーブルが生成されます。
+
+```r
+selected_ids <- input$experiment_selector
+comp_df <- all_results %>%
+  filter(experiment_id %in% selected_ids) %>%
+  select(experiment_id, MRR, `Hits@1`, `Hits@5`,
+         F1, Accuracy, Precision, Recall) %>%
+  arrange(desc(MRR))
+
+DT::datatable(comp_df, options = list(pageLength = 10, scrollX = TRUE))
+```
+
+MRRでソートすれば最良構成をすぐに特定できます。ただし、Hits@5やF1との一致も確認してください。ランキング指標と分類指標の間に乖離がある場合、モデルの興味深い振る舞いが隠れていることがあります。
+
+## 訓練履歴の検査
+
+訓練履歴ドロップダウンから実験を選ぶと、2つのパネルが表示されます。左パネルはtraining loss（青）とvalidation loss（オレンジ）をエポック番号に対してプロットします。validation lossが平坦化し始める点、あるいは上昇に転じる点が最適な停止エポックです。training lossとvalidation lossの差が着実に広がっていく場合は、過学習のシグナルと判断できます。
+
+右パネルは各チェックポイントエポックにおけるvalidation MRRとHits@5を示し、最終評価に使われたエポックを灰色の垂直線でマークします。これら2つのカーブを合わせて見ることで、訓練が振動や早期発散なしに安定して収束したかどうかを検証できます。
+
+```r
+plot_ly(history, x = ~epoch) %>%
+  add_trace(y = ~train_loss, name = "Train loss",
+            line = list(color = "#1f77b4")) %>%
+  add_trace(y = ~val_loss, name = "Val loss",
+            line = list(color = "#ff7f0e")) %>%
+  layout(xaxis = list(title = "Epoch"),
+         yaxis = list(title = "Loss"))
+```
+
+## 最良モデルを見つけるための実践的ワークフロー
+
+まずBenchmark Dashboardタブを開き、トップレベルの指標カードで現在の最良結果を概観します。次に階層ベンチマーク表を見て、自分の研究に最も関連するタスク（たとえばglycan cluster予測）に注目します。比較ドロップダウンでそのタスクに関する3〜5件の実験を選択し、お好みの指標でテーブルをソートします。最有力候補が見つかったら、その訓練履歴をクリックして、訓練が安定して収束したことを確認します。実験IDを記録しておいてください。Embedding Explorer（第\@ref(embedding-explorer)章）やHierarchy Browser（第\@ref(hierarchy-browser)章）で使うことになります。
+
+## 実践的なヒント
+
+指標の選択は見かけ以上に重要です。MRRは低いランクを厳しく罰するため、検索順位が問題になる場面に適しています。一方、Hits@5はより寛容で、分類志向のユースケースに向いています。ダッシュボード上のすべての棒と線は、ホバーで正確な値を表示するので、軸から読み取る推測は不要です。DTテーブルのCSVボタンで比較結果をダウンロードし、外部分析に活用できます。また、各実験IDは `experiments/configs/` 内の構成YAMLに対応しており、`yaml::read_yaml("experiments/configs/<id>.yaml")` で全ハイパーパラメータを確認できます。

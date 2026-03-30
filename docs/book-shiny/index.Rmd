@@ -1,0 +1,37 @@
+---
+title: "glycoMusubi Shiny App Guide"
+author: "Yusuke Matsui"
+date: "`r Sys.Date()`"
+site: bookdown::bookdown_site
+documentclass: book
+link-citations: yes
+description: "User guide for the glycoMusubi interactive web application. Covers all seven modules, deployment options, and extension patterns."
+---
+
+# Preface {-}
+
+[日本語版はこちら](../book-shiny-ja/_book/index.html){target="_blank"}
+
+This book is the official user guide for the **glycoMusubi Shiny App**, an interactive web application for exploring the glycoMusubi knowledge graph, running glycan predictions, and analysing glycosylation enzyme expression.
+
+## Who is this book for? {-}
+
+- **Researchers** using the web interface to explore glycobiology data
+- **Developers** deploying or extending the Shiny application
+- **Bioinformaticians** integrating glycoMusubi into their workflows
+
+## Book structure {-}
+
+| Part | Chapters | Content |
+|------|----------|---------|
+| **Getting Started** | 1--2 | Installation, launch, and overview dashboard |
+| **Modules** | 3--9 | Detailed guide for each of the seven modules |
+| **Operations** | 10--11 | Deployment, Docker, and API extension |
+
+## Quick start {-}
+
+```bash
+cd glycoMusubi/shiny_app
+docker compose up -d
+# Open http://localhost:3838
+```

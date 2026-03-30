@@ -1,0 +1,54 @@
+# Round 7b: R6 + aggressive subsampling + stronger balancing
+# Hypothesis: 50K cap + higher balance weight further boosts rare relations
+name: glycokgnet_inductive_r7b
+seed: 42
+embedding_dim: 256
+output_dir: experiments_v2
+
+model:
+  name: GlycoKGNet
+  embedding_dim: 256
+  glycan_encoder_type: tree_mpnn
+  protein_encoder_type: esm2_site_aware
+  esm2_cache_path: data_clean/esm2_cache
+  site_map_path: data_clean/site_positions_map.pt
+  num_hgt_layers: 0
+  num_hgt_heads: 8
+  use_bio_prior: false
+  use_cross_modal_fusion: true
+  num_fusion_heads: 4
+  decoder_type: hybrid
+  dropout: 0.1
+  loss_fn: bce
+  adversarial_temperature: 0.5
+  label_smoothing: 0.05
+  inductive: true
+  text_node_types:
+    - disease
+    - cellular_location
+
+data:
+  holdout_ratio: 0.15
+  inductive_min_degree: 2
+
+training:
+  epochs: 100
+  batch_size: 512
+  lr: 5.0e-4
+  weight_decay: 1.0e-5
+  optimizer: adam
+  scheduler: cosine
+  grad_clip: 1.0
+  early_stopping_patience: 40
+  eval_every: 10
+  relation_balance_alpha: 0.5
+  relation_balance_max_weight: 10.0
+  max_edges_per_type: 50000
+  num_negatives: 64
+
+tags:
+  - glycokgnet
+  - inductive
+  - round7b
+  - edge_subsample_50k
+  - strong_balance

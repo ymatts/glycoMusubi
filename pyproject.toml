@@ -1,0 +1,89 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "glycoMusubi"
+version = "0.2.0"
+description = "glycoMusubi: Knowledge-graph embedding framework for glycobiology."
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+dependencies = [
+    "pandas",
+    "requests",
+    "tqdm",
+    "pyarrow",
+    "pyyaml",
+]
+
+[project.optional-dependencies]
+embedding = [
+    "torch>=2.0.0",
+    "torch-geometric>=2.4.0",
+    "omegaconf>=2.3.0",
+    "wandb>=0.15.0",
+    "numpy",
+    "scikit-learn",
+    "matplotlib",
+    "transformers>=4.30.0",
+    "fair-esm>=2.0.0",
+]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov",
+    "ruff>=0.4.0",
+    "mypy>=1.8",
+]
+
+[tool.setuptools.packages.find]
+include = ["glycoMusubi*"]
+
+# ── Ruff ──────────────────────────────────────────────────────────────
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+src = ["glycoMusubi"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "ANN", "B", "A", "SIM"]
+ignore = ["ANN101", "ANN102"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["glycoMusubi"]
+
+[tool.ruff.format]
+quote-style = "double"
+
+# ── Mypy ──────────────────────────────────────────────────────────────
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+ignore_missing_imports = true
+
+# ── Pytest ────────────────────────────────────────────────────────────
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v --tb=short"
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "gpu: marks tests that require GPU",
+    "integration: marks integration tests",
+]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+]
+
+# ── Coverage ─────────────────────────────────────────────────────────
+[tool.coverage.run]
+source = ["glycoMusubi"]
+
+[tool.coverage.report]
+show_missing = true
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__ == .__main__.",
+    "if TYPE_CHECKING:",
+]

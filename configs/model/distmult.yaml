@@ -1,0 +1,8 @@
+# DistMult model configuration
+model:
+  name: DistMult
+  embedding_dim: 256
+  margin: 0.0
+  p_norm: 2
+  regularization: 1.0e-5
+  reg_type: l3

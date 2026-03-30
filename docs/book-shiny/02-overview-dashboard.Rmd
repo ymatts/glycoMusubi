@@ -1,0 +1,89 @@
+# Overview Dashboard {#overview-dashboard}
+
+The Overview tab is the landing page of the glycoMusubi Shiny App. It gives you an at-a-glance summary of the knowledge graph's scale and composition, and introduces the project context for new users. This chapter walks through each section of the page, explains the numbers you will see, and shows how to customise the display if you are running the app locally.
+
+```
+<!-- screenshot placeholder: overview_full_page.png -->
+<!-- Full-page capture of the Overview tab showing all three sections. -->
+```
+
+## Value Boxes
+
+The top of the page presents four `bslib::value_box()` cards arranged in a single row. Each card displays a key statistic loaded from `data/metadata.json` at startup: the total number of nodes (78,263), the total number of edges (2,508,960), the count of distinct entity types (10), and the count of distinct relation types (14). The boxes are colour-coded blue, green, teal, and amber respectively, and hovering over any box reveals a tooltip with a brief description of what that count represents.
+
+These counts are computed from the underlying data files in a straightforward way. Node and edge totals are simply the row counts of `nodes.parquet` and `edges.parquet`, while entity types and relation types are the distinct values of the `node_type` and `relation` columns.
+
+```r
+# Pseudo-code used inside the server
+n_nodes    <- nrow(nodes)
+n_edges    <- nrow(edges)
+n_entities <- n_distinct(nodes$node_type)
+n_rels     <- n_distinct(edges$relation)
+```
+
+```
+<!-- screenshot placeholder: value_boxes_closeup.png -->
+<!-- Close-up of the four value boxes with numbers visible. -->
+```
+
+## Node Type Distribution
+
+The left-hand chart is a horizontal bar chart rendered with `plotly`. It uses a log scale on the x-axis because node counts span several orders of magnitude, from glycans at nearly 59,000 down to subclasses at 143.
+
+Glycan nodes dominate the graph, comprising about 75% of all nodes (58,628). This reflects the combinatorial diversity of glycan compositions compared with the smaller number of proteins or enzymes that process them. Site nodes form the second-largest category at 10,218, representing specific amino-acid positions on proteins where glycosylation or other post-translational modifications occur. Proteins (4,306), enzymes (1,611), and diseases (1,424) make up the middle tier. The long tail of smaller categories -- compounds (958), organisms (452), pathways (318), cellular locations (205), and subclasses (143) -- are numerically small but structurally important because they provide hierarchical and spatial context for the major entities.
+
+```
+<!-- screenshot placeholder: node_type_barchart.png -->
+<!-- Plotly horizontal bar chart with bars ordered largest-to-smallest,
+     glycan bar visually dominating, log-scale x-axis. -->
+```
+
+## Relation Type Distribution
+
+The right-hand chart follows the same horizontal bar style and reveals that hierarchy edges dominate the knowledge graph. The `parent_of` and `child_of` relations each appear 892,411 times, together accounting for roughly 71% of all edges. These encode the glycan substructure hierarchy, linking every glycan to its parent and child compositions. Their counts are identical because one is simply the inverse of the other.
+
+Beyond the hierarchy, the next largest relation is `has_glycan` (287,634 edges), which captures protein-glycan associations. Site-related edges follow: `has_site` connects proteins and enzymes to specific positions (124,509), while `ptm_crosstalk` records co-occurrence of post-translational modifications between sites (98,712). Disease associations, inhibition relationships, variant links, subclass membership, expression data, localisation, catalysis, organism associations, and pathway membership round out the remaining edge types in decreasing order of frequency.
+
+Functional edges like `inhibits`, `ptm_crosstalk`, and `associated_with_disease` are smaller in absolute count but carry high biological value for downstream queries and analyses.
+
+```
+<!-- screenshot placeholder: relation_type_barchart.png -->
+<!-- Plotly horizontal bar chart for relations.  parent_of and child_of
+     have nearly identical bars at the top. -->
+```
+
+You can interact with both charts using standard plotly controls. Click any bar to see the exact count as a tooltip, and use the toolbar in the top-right corner to zoom, pan, or download the chart as a PNG.
+
+## About Section
+
+Below the two charts you will find the About panel, which serves three purposes. First, a project description explains that glycoMusubi integrates data from GlyGen, GlyTouCan, UniProt, ChEMBL, and PTMCode into a unified knowledge graph for glycobiology research and drug discovery. Second, a concise module summary lists all seven interactive modules and what each one does, mirroring the navbar as a quick reference. Third, a citation block provides both a formatted reference and BibTeX entry for researchers who use glycoMusubi in their work.
+
+```bibtex
+@article{matsui2026glycokg,
+  title   = {glycoMusubi: A Knowledge Graph for Glycobiology},
+  author  = {Matsui, Yusuke},
+  year    = {2026},
+  journal = {Bioinformatics}
+}
+```
+
+```
+<!-- screenshot placeholder: about_citation_block.png -->
+<!-- The citation card with BibTeX and formatted reference. -->
+```
+
+## Customising the Overview
+
+If you are running the app locally, several aspects of the Overview page are easy to adjust. Value box colours are set in `modules/mod_overview.R` using the `bslib::value_box(theme = ...)` parameter. The chart axis scale can be toggled between log and linear by editing the `plotly::layout(xaxis = list(type = ...))` call. The About text is stored as inline HTML within `mod_overview_ui()` -- you can edit it directly or load from a markdown file for easier maintenance.
+
+```r
+# Example: switch to linear scale for the node-type chart
+plotly::layout(
+  p,
+  xaxis = list(type = "linear", title = "Count")
+)
+```
+
+## Next Steps
+
+Now that you understand the knowledge graph at a high level, proceed to Chapter \@ref(kg-explorer) to learn how to search for specific nodes and visualise local subgraphs.

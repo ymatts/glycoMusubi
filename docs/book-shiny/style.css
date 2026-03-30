@@ -1,0 +1,12 @@
+/* glycoMusubi Gitbook custom styles */
+:root { --glyco-blue: #2b6a99; --glyco-red: #c04e3f; }
+.book .book-body .page-wrapper .page-inner { max-width: 900px; }
+h1, h2, h3 { color: var(--glyco-blue); }
+code { background: #f4f7fa; padding: 2px 6px; border-radius: 3px; }
+pre { background: #f8f9fa; border-left: 3px solid var(--glyco-blue); }
+.important { background: #fff3cd; border-left: 4px solid #ffc107; padding: 1em; margin: 1em 0; }
+.note { background: #d6e6f0; border-left: 4px solid var(--glyco-blue); padding: 1em; margin: 1em 0; }
+table { border-collapse: collapse; width: 100%; }
+th { background: var(--glyco-blue); color: white; padding: 8px; }
+td { padding: 8px; border-bottom: 1px solid #dee2e6; }
+img { max-width: 100%; }

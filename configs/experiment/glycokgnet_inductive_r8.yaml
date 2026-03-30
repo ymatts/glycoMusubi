@@ -1,0 +1,25 @@
+name: glycokgnet_inductive_r8
+seed: 42
+embedding_dim: 256
+output_dir: experiments_v2
+
+model:
+  name: GlycoKGNet
+  embedding_dim: 256
+  glycan_encoder_type: tree_mpnn
+  protein_encoder_type: esm2_site_aware
+  site_map_path: data_clean/site_positions_map.pt
+  num_hgt_layers: 0
+  decoder_type: hybrid
+  dropout: 0.1
+  loss_fn: bce
+  adversarial_temperature: 1.0
+  text_node_types: [disease]
+
+training:
+  epochs: 400
+  lr: 1.0e-3
+  num_negatives: 32
+  relation_balance_alpha: 0.5
+  max_edges_per_type: 0
+  function_aware_negatives: true

@@ -1,0 +1,128 @@
+schema_version: "1.0"
+description: "Knowledge Graph schema definition for glycoMusubi"
+
+graph:
+  name: "glycoMusubi"
+  version: "0.2.0"
+  description: "Glycan-centric knowledge graph integrating data from GlyGen, GlyTouCan, UniProt, and ChEMBL"
+
+node_schema:
+  required_columns:
+    - name: node_id
+      type: string
+      nullable: false
+      description: "Primary identifier for the node"
+    - name: node_type
+      type: string
+      nullable: false
+      description: "Type of the node entity"
+    - name: label
+      type: string
+      nullable: true
+      description: "Human-readable label for the node"
+    - name: metadata
+      type: string
+      nullable: true
+      description: "JSON-encoded metadata object"
+
+  valid_node_types:
+    - enzyme
+    - protein
+    - glycan
+    - disease
+    - variant
+    - compound
+
+edge_schema:
+  required_columns:
+    - name: source_id
+      type: string
+      nullable: false
+      description: "Source node identifier"
+    - name: target_id
+      type: string
+      nullable: false
+      description: "Target node identifier"
+    - name: relation
+      type: string
+      nullable: false
+      description: "Type of relationship between nodes"
+    - name: metadata
+      type: string
+      nullable: true
+      description: "JSON-encoded metadata object"
+
+  valid_relations:
+    - inhibits
+    - has_glycan
+    - associated_with_disease
+    - has_variant
+
+validation:
+  node_rules:
+    - rule: "unique_node_ids"
+      description: "All node_id values must be unique"
+    - rule: "valid_node_type"
+      description: "node_type must be one of the valid_node_types"
+    - rule: "non_empty_node_id"
+      description: "node_id cannot be empty or null"
+
+  edge_rules:
+    - rule: "valid_source_id"
+      description: "source_id must reference an existing node_id"
+    - rule: "valid_target_id"
+      description: "target_id must reference an existing node_id"
+    - rule: "valid_relation"
+      description: "relation must be one of the valid_relations"
+    - rule: "no_self_loops"
+      description: "source_id and target_id cannot be the same"
+    - rule: "unique_edges"
+      description: "No duplicate (source_id, target_id, relation) tuples"
+
+  graph_rules:
+    - rule: "no_orphan_nodes"
+      description: "All nodes should be connected to at least one edge"
+      severity: "warning"
+    - rule: "connected_graph"
+      description: "Graph should be weakly connected"
+      severity: "warning"
+    - rule: "acyclic_inhibits"
+      description: "inhibits relation should not form cycles"
+      severity: "error"
+
+statistics:
+  node_metrics:
+    - total_count
+    - count_by_type
+    - orphan_count
+  
+  edge_metrics:
+    - total_count
+    - count_by_relation
+    - duplicate_count
+  
+  graph_metrics:
+    - connected_components
+    - average_degree
+    - max_degree
+    - density
+
+export_formats:
+  tsv:
+    enabled: true
+    separator: "\t"
+    encoding: "utf-8"
+  
+  parquet:
+    enabled: true
+    compression: "snappy"
+    row_group_size: 10000
+  
+  neo4j:
+    enabled: false
+    node_label_property: "node_type"
+    relationship_type_property: "relation"
+  
+  graphml:
+    enabled: false
+    include_metadata: true

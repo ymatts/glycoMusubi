@@ -1,0 +1,87 @@
+# glycoMusubi Architecture {#glycoMusubi-architecture}
+
+This chapter describes the design, schema, data sources, and scale of glycoMusubi. By the end, you will understand how the graph is constructed, what each node and edge type represents, and how identifiers are normalised across the six contributing databases.
+
+## Design Principles
+
+glycoMusubi was built around four guiding principles that together ensure the graph is both scientifically rigorous and practically useful.
+
+The first principle is reproducibility. Every step from raw data download to final triple generation is scripted and version-controlled, so the build pipeline can be re-executed end-to-end to regenerate the graph from updated source databases. This is essential for a living resource that must track evolving upstream databases.
+
+The second principle is schema enforcement. All triples are validated against a declared schema that specifies which source and target node types are permitted for each relation type. Triples that violate the schema are rejected during construction, preventing silent corruption of the graph's semantics.
+
+Building on this rigorous foundation, the third principle is extensibility. New data sources, node types, or relation types can be added by implementing a source-specific adapter and registering the new types in the schema, without modifying the core pipeline. This design decision anticipates future growth as glycomics databases expand.
+
+The fourth principle is interoperability. Standard identifiers --- UniProt accessions, GlyTouCan accessions, ChEMBL IDs, and Reactome stable IDs --- are used wherever possible, enabling direct cross-referencing with external resources and ensuring that glycoMusubi can be layered into broader biomedical data ecosystems.
+
+## Node Types
+
+glycoMusubi contains **78,263 nodes** distributed across 10 types, each serving a distinct biological role in the graph. The following table provides a comprehensive overview.
+
+| Node type | Description | ID format | Primary source | Count |
+|:----------|:------------|:----------|:---------------|------:|
+| `glycan` | Individual glycan structures | GlyTouCan accession (e.g., `G00051MO`) | GlyTouCan, GlyGen | 30,014 |
+| `protein` | Glycoproteins and interacting proteins | UniProt accession (e.g., `P02768`) | UniProt, GlyGen | 15,482 |
+| `enzyme` | Glycosyltransferases and glycosidases | UniProt accession (e.g., `Q10469`) | UniProt, Reactome | 1,247 |
+| `site` | Glycosylation sites on proteins | `SITE::UniProtID_Position_Type` | GlyGen | 12,876 |
+| `disease` | Human diseases with glycosylation involvement | Disease ontology ID or name string | GlyGen, UniProt | 3,412 |
+| `compound` | Small molecules, inhibitors, sugar nucleotides | ChEMBL ID (e.g., `CHEMBL941`) | ChEMBL | 5,891 |
+| `variant` | Genetic variants in glyco-genes | dbSNP rsID or UniProt variant ID | UniProt, PTMCode | 4,223 |
+| `motif` | Glycan structural motifs | Motif name string | GlyGen | 287 |
+| `reaction` | Biochemical reactions in glycan biosynthesis | Reactome stable ID (e.g., `R-HSA-446199`) | Reactome | 1,834 |
+| `cellular_location` | Subcellular compartments | GO cellular component ID | UniProt, Reactome | 2,997 |
+
+Table: The 10 node types in glycoMusubi with identifier formats and counts.
+
+These node types can be conceptually organised into four layers that reflect the biological hierarchy from molecular structure to phenotype. At the structural layer (Layer 1) sit proteins, glycosylation sites, glycans, and motifs --- the molecular entities that define glycan biology at its most concrete level. The molecular layer (Layer 2) adds enzymes, compounds, and genetic variants, which act upon and modulate the structural entities. The functional layer (Layer 3) captures reactions and their cellular locations, representing the dynamic processes of glycan biosynthesis. At the top, the phenotype layer (Layer 4) contains disease nodes, linking molecular events to clinical outcomes. Traversing from Layer 1 to Layer 4 requires multi-hop queries, which is precisely the kind of reasoning that knowledge graph embeddings are designed to support.
+
+## Relation Types
+
+The graph's **2,508,960 edges** are distributed across 14 relation types, each with defined source and target node type constraints.
+
+| Relation type | Source type | Target type | Edge count | Source DB |
+|:--------------|:-----------|:------------|----------:|:----------|
+| `substructure_of` | glycan | glycan | 2,268,102 | GlyTouCan |
+| `glycosylated_at` | protein | site | 42,518 | GlyGen |
+| `has_glycan` | site | glycan | 38,741 | GlyGen |
+| `has_motif` | glycan | motif | 51,224 | GlyGen |
+| `associated_with` | protein | disease | 18,392 | UniProt, GlyGen |
+| `catalyzes` | enzyme | reaction | 4,712 | Reactome |
+| `located_in` | enzyme | cellular_location | 3,481 | UniProt |
+| `participates_in` | compound | reaction | 6,893 | Reactome, ChEMBL |
+| `interacts_with` | protein | protein | 27,645 | PTMCode |
+| `inhibits` | compound | enzyme | 12,384 | ChEMBL |
+| `has_variant` | protein | variant | 11,267 | UniProt |
+| `variant_associated_with` | variant | disease | 8,934 | UniProt |
+| `biosynthesized_by` | glycan | enzyme | 9,446 | Reactome, GlyGen |
+| `produces` | reaction | glycan | 5,221 | Reactome |
+
+Table: The 14 relation types in glycoMusubi with type constraints and edge counts.
+
+The edge distribution is highly skewed. The `substructure_of` relation alone accounts for 90.4% of all edges (2,268,102 out of 2,508,960), reflecting the combinatorial nature of glycan structural hierarchy: each complex glycan contains many substructures, and each substructure appears in many glycans. This imbalance has important implications for model training --- relation-specific sampling strategies or separate evaluation by relation type are strongly recommended to prevent the dominant relation from overwhelming the learning signal for rarer but biologically critical relations like `has_glycan` or `associated_with`.
+
+## Data Sources
+
+glycoMusubi integrates data from six curated databases, each accessed programmatically and processed by a dedicated adapter module. GlyGen (v1.28) provides the backbone of glycan--protein associations, including site annotations, disease links, and motif assignments. GlyTouCan (v3.1), the international glycan structure repository, contributes the vast majority of edges through its substructure relationships. UniProt (release 2024_05) supplies protein annotations, enzyme classifications, genetic variants, and subcellular location data. ChEMBL (v34) contributes bioactive small molecules along with their inhibitory relationships to enzymes. PTMCode (v2) provides the post-translational modification crosstalk network that generates protein--protein interaction edges. Finally, Reactome (v88) supplies curated pathway and reaction data, connecting enzymes to the reactions they catalyze and the glycan products they generate.
+
+## Identifier Normalisation
+
+Integrating six databases with different identifier schemes requires careful normalisation to avoid both duplication (the same entity appearing under different identifiers) and conflation (different entities being merged under the same identifier).
+
+For proteins, many databases reference UniProt isoform-specific accessions such as P02768-2. glycoMusubi maps all isoform accessions to the canonical accession (P02768) unless the isoform distinction is functionally relevant --- for example, when different isoforms have distinct glycosylation site occupancy. The mapping table is derived from UniProt's ID mapping service.
+
+For glycans, all accessions are validated against the current GlyTouCan registry. Deprecated or withdrawn accessions are mapped to their replacement accessions where available, and structures not present in GlyTouCan are excluded entirely. This ensures that every glycan node in the graph corresponds to a currently valid structure.
+
+Glycosylation sites use a composite identifier format (`SITE::{UniProtAccession}_{ResiduePosition}_{GlycosylationType}`) to ensure uniqueness. For example, `SITE::P02768_184_N-linked` denotes Asn-184 of human serum albumin, while `SITE::P01857_297_N-linked` marks the pharmaceutically critical Asn-297 of IgG1 Fc, the glycosylation site whose modification is central to antibody effector function.
+
+## Scale and Statistics
+
+The completed graph contains 78,263 nodes and 2,508,960 edges spanning 10 node types and 14 relation types. The largest node type is `glycan` with 30,014 entities (38.3% of all nodes), and the largest relation type is `substructure_of` with 2,268,102 edges (90.4% of all edges). The graph is fully connected as a single component, with an average node degree of 64.1 but a median degree of only 8. This large gap between mean and median reflects a heavy-tailed degree distribution: common glycan substructures participate in hundreds of thousands of relationships, while most nodes have fewer than 10 connections.
+
+## Comparison with Other Biomedical KGs
+
+When placed alongside major biomedical knowledge graphs, glycoMusubi's distinguishing feature is immediately apparent: it is the only resource that provides glycan-level resolution. DRKG (97,238 nodes, 5.9M edges) focuses on drug repurposing, Hetionet (47,031 nodes, 2.3M edges) targets translational medicine, and PrimeKG (129,375 nodes, 4.1M edges) addresses precision medicine --- but none of these includes glycan structures as first-class entities, glycosylation sites linked to specific proteins, or the glycan substructure hierarchy that constitutes the vast majority of glycoMusubi's edges. By filling this gap, glycoMusubi makes glycan-mediated biological processes visible to embedding-based reasoning for the first time.
+
+## Summary
+
+glycoMusubi integrates 78,263 nodes (10 types) and 2,508,960 edges (14 relation types) from six curated databases. Its design emphasises reproducibility, schema enforcement, and extensibility. Identifier normalisation ensures correct entity unification across sources, and the graph is dominated by glycan substructure relationships (90.4% of edges). In the following chapters, we describe how to query, analyse, and run link prediction experiments on this graph.

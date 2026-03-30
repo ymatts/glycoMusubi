@@ -1,0 +1,118 @@
+# はじめに {#getting-started}
+
+本章では、glycoMusubi Shiny Appを初めて起動するまでの手順をひととおり説明します。環境の準備からデータの前処理、初回起動時に表示される画面の確認、そしてアプリ内のナビゲーション方法まで、順を追って進めていきます。
+
+## 前提条件
+
+glycoMusubi Shiny Appを動かすには、大きく二つの方法があります。一つはDockerを使う方法、もう一つはローカルのR環境で直接実行する方法です。
+
+Dockerを使う場合、必要なのはDocker Engine 24.0以降とDocker Compose v2です。知識グラフのデータは起動時にすべてメモリに読み込まれるため、少なくとも4 GBの空きRAMを確保してください。Dockerを使う最大の利点は、Rパッケージの依存関係をすべてコンテナ内で解決してくれることです。ホスト側にRをインストールする必要はありません。
+
+ローカルR環境で実行する場合は、R 4.3以降をインストールしてください。加えて、データ前処理のためにPython 3.9以上が必要です。Rの依存パッケージは以下のとおりです。
+
+```r
+install.packages(c(
+  "shiny",      # Webフレームワーク
+  "bslib",      # Bootstrap 5テーマ
+  "DT",         # インタラクティブテーブル
+  "plotly",     # インタラクティブチャート
+  "visNetwork", # ネットワークグラフ可視化
+  "dplyr",      # データ操作
+  "readr",      # 高速CSV/TSV読み込み
+  "jsonlite",   # JSON入出力
+  "arrow",      # Parquetサポート
+  "tidyr",      # データ整形
+  "stringr"     # 文字列操作
+))
+```
+
+これらのパッケージはWebフレームワーク、インタラクティブ可視化、そしてデータ操作という三つの役割を担っています。shinyとbslibがアプリケーションの骨格を構成し、plotlyとvisNetworkがグラフやネットワークの描画を受け持ち、dplyrやarrowが250万行のエッジテーブルを高速に処理します。
+
+## Docker Composeによる起動
+
+最も簡単な起動方法はDocker Composeです。リポジトリをクローンし、`shiny_app`ディレクトリに移動して、コンテナを立ち上げるだけで完了します。
+
+```bash
+git clone https://github.com/<your-org>/glycoMusubi.git
+cd glycoMusubi/shiny_app
+docker compose up -d
+```
+
+コンテナが起動したら、ブラウザで `http://localhost:3838` を開いてください。別のターミナルで `docker compose logs -f` を実行すれば、起動の進捗を確認できます。`Listening on http://0.0.0.0:3838` というメッセージが表示されれば準備完了です。
+
+Dockerイメージのビルド時には、前処理済みデータがコンテナ内にコピーされ、ポート3838が外部に公開されます。初回のイメージビルドには数分かかりますが、二回目以降はキャッシュが効くため数秒で起動します。
+
+## ローカルRでの起動
+
+Dockerを使わない場合は、まずデータの前処理が必要です。リポジトリのルートディレクトリで `prepare_shiny_data.py` を実行してください。このスクリプトは `kg/` ディレクトリ配下の知識グラフファイルを読み取り、Shinyアプリに最適化された形式で `shiny_app/data/` に出力します。
+
+```bash
+cd glycoMusubi
+python3 prepare_shiny_data.py
+```
+
+生成されるファイルには、ノードテーブル（78,263行）とエッジテーブル（約250万行）のParquetファイル、糖鎖付加部位の予測結果、糖鎖検索ランキング、UMAPによる2次元座標が含まれます。加えて、糖鎖サブクラスの階層木構造と、KGの要約統計量を格納したJSONファイルも生成されます。
+
+前処理が完了したら、RからShinyアプリを起動します。
+
+```r
+setwd("glycoMusubi/shiny_app")
+shiny::runApp(port = 3838, launch.browser = TRUE)
+```
+
+`launch.browser = TRUE` を指定しているため、デフォルトブラウザが自動的に開きます。もしブラウザが開かない場合は、手動で `http://localhost:3838` にアクセスしてください。
+
+## 初回起動時の画面
+
+アプリが起動すると、最初にOverviewタブが表示されます。画面上部には4つのvalue boxが並び、ノード数（78,263）、エッジ数（2,508,960）、エンティティ型数（10）、関係型数（14）というKG全体の要約統計量が一目で把握できます。
+
+```
+<!-- screenshot placeholder: overview_first_launch.png -->
+```
+
+value boxの下には二つの棒グラフが横に並んでいます。左のグラフはノード型ごとの分布を示し、glycanが58,628と圧倒的に多いことがすぐにわかります。右のグラフは関係型ごとの分布を示し、`parent_of`と`child_of`の階層エッジが全体の約71%を占めていることを表しています。
+
+画面の最下部にはAboutセクションがあり、プロジェクトの概要と引用情報が記載されています。
+
+## ナビゲーション
+
+画面上部のナビゲーションバーには8つのタブがあります。各タブは独立したモジュールに対応しています。Overviewタブは今見ているKGの要約画面です。KG Explorerではノードの検索とサブグラフの可視化ができます。Glycan Predictorはタンパク質ごとの糖鎖付加予測を表示し、Glycan Retrievalはタンパク質に対する候補糖鎖のランキングを提示します。Cell-type Expressionでは細胞型ごとの酵素発現を調べることができます。
+
+残りの3つのタブ、Benchmarks、Embedding Explorer、Hierarchy Browserはそれぞれモデル評価指標、KG埋め込みの2次元投影、糖鎖サブクラスの分類木を扱います。
+
+タブをクリックすると該当モジュールに切り替わり、左のサイドバーもそのモジュール専用のコントロールに更新されます。ブラウザのURLも `?tab=kg_explorer` のように変化するため、特定のモジュールへのブックマークや共有が可能です。
+
+```
+<!-- screenshot placeholder: navbar_annotated.png -->
+```
+
+## トラブルシューティング
+
+ポート3838が他のプロセスに使われている場合、`Error: cannot open connection` というエラーが発生するか、Dockerコンテナが即座に終了します。まず `lsof -i :3838` でどのプロセスが使用中かを確認してください。そのプロセスを停止するか、別のポートを指定します。
+
+```bash
+lsof -i :3838
+docker compose up -d -e SHINY_PORT=4000
+shiny::runApp(port = 4000)
+```
+
+`shiny_app/data/` ディレクトリが存在しない場合は、`File not found: data/nodes.parquet` のようなエラーが表示されます。この場合はリポジトリのルートで `python3 prepare_shiny_data.py` を再実行してデータを生成してください。
+
+250万行のエッジテーブルを読み込むには約2--3 GBのRAMが必要です。アプリが無言でクラッシュしたり、コンテナがOOM killerに停止されたりする場合は、メモリの上限を引き上げてください。Dockerでは `docker-compose.yml` の `deploy.resources.limits.memory` で設定できます。
+
+```yaml
+services:
+  shiny:
+    deploy:
+      resources:
+        limits:
+          memory: 6G
+```
+
+ローカル環境では他のアプリケーションを終了するか、スワップファイルを増やすことで対処できます。
+
+初回のデータ読み込みには通常15--30秒かかります。Parquetファイルがメモリに載ってしまえば、その後の操作は高速です。ノートPCで起動が遅く感じる場合は、`prepare_shiny_data.py` の `--min-score` フラグを使って低信頼度のエッジを除外し、データ量を減らすことを検討してください。
+
+## 次のステップ
+
+以上でアプリの起動とナビゲーションの基本が整いました。第\@ref(overview-dashboard)章に進んでOverviewタブの詳細を確認するか、興味のあるモジュールの章に直接ジャンプしてください。

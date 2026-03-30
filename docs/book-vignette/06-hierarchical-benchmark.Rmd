@@ -1,0 +1,186 @@
+# Hierarchical Glycan Prediction Benchmark {#hierarchical-benchmark}
+
+Predicting the exact glycan structure attached to a given protein site remains one of the hardest open problems in glycobiology. The combinatorial diversity of glycan structures, coupled with the context-dependent nature of glycan biosynthesis, makes this a uniquely challenging prediction task. glycoMusubi addresses this challenge by framing glycan prediction as a hierarchical six-task benchmark, in which each successive task narrows the candidate space and demands increasingly fine-grained specificity. This chapter describes every task in the hierarchy, reports baseline results, and introduces the concept of a "determination boundary" that separates tractable prediction problems from those that remain fundamentally open.
+
+## The hierarchy concept
+
+The six benchmark tasks form a prediction funnel. At the top, Task 1 poses a simple binary question -- whether a given sequon is an N-linked glycosylation site -- while at the bottom, Task 6 asks the model to identify the exact glycan accession from a vocabulary of over two thousand candidates. Between these extremes, the intermediate tasks address site ranking, glycosylation type composition, structural family classification, and structural cluster assignment. The candidate space grows from two (binary classification) to 2,357 (full retrieval), making each successive step progressively harder.
+
+| Task | Question | Output | Candidates |
+|-----:|:---------|:-------|:-----------|
+| 1 | Is this an N-linked glycosylation site? | Binary | -- |
+| 2 | Which sites on this protein are glycosylated? | Ranked list | All NXS/T sequons |
+| 3 | What glycosylation type fractions at this site? | Regression | 4 types |
+| 4 | Which structural family? | 8-class | 8 families |
+| 5 | Which structural cluster? | 20-class | 20 clusters |
+| 6 | Which exact glycan? | Retrieval | 2,357 N-linked |
+
+This hierarchical design serves two purposes. First, it allows researchers to assess model capabilities at multiple granularities rather than evaluating only against the hardest possible target. Second, the outputs of earlier tasks can serve as features for later ones, enabling cascade architectures that decompose the full prediction problem into manageable stages.
+
+## Task 1 -- N-linked site classification {#task-1}
+
+The first task asks whether a given NXS/T sequon position in a protein sequence corresponds to a true N-glycosylation site. The model architecture is a two-layer MLP applied to the ESM-2 per-residue embedding at the asparagine position, incorporating a window of plus or minus 15 residues for local sequence context. This straightforward approach achieves an F1 score of 0.924, with precision at 0.931, recall at 0.917, and AUROC at 0.972. These strong results confirm that sequence context alone is largely sufficient to identify true N-glycosylation sites, a finding consistent with earlier work from NetNGlyc and related prediction tools.
+
+```r
+# Reproduce the evaluation
+library(readr)
+library(yardstick)
+
+preds <- read_csv("results/benchmark/task1_predictions.csv")
+
+preds %>%
+  mutate(truth = factor(label, levels = c(1, 0)),
+         pred  = factor(as.integer(score > 0.5), levels = c(1, 0))) %>%
+  f_meas(truth, pred)
+```
+
+The near-solved status of this task is reassuring from a biological standpoint: the NXS/T sequon motif, combined with its flanking residues and structural accessibility features implicitly captured by the protein language model, provides a strong and well-understood signal for N-glycosylation.
+
+## Task 2 -- Site ranking {#task-2}
+
+Moving beyond binary site classification, Task 2 asks the model to rank the confirmed glycosylation sites of a protein by occupancy -- the fraction of protein molecules glycosylated at each site. This task uses a pairwise ranking loss over the same ESM-2 features, augmented with a global protein embedding obtained by mean-pooling. The model achieves a Recall@3 of 0.683, NDCG@5 of 0.741, and Spearman rho of 0.612. These results indicate that the model captures meaningful occupancy differences between sites, though substantial room for improvement remains, particularly for proteins with many closely-ranked sites.
+
+```r
+# Inspect ranking quality per protein
+library(dplyr)
+
+ranks <- read_csv("results/benchmark/task2_rankings.csv")
+
+ranks %>%
+  group_by(uniprot_id) %>%
+  summarise(ndcg5 = first(ndcg_at_5)) %>%
+  ggplot2::ggplot(ggplot2::aes(x = ndcg5)) +
+  ggplot2::geom_histogram(binwidth = 0.05, fill = "steelblue") +
+  ggplot2::labs(x = "NDCG@5", y = "Proteins",
+                title = "Distribution of per-protein NDCG@5 (Task 2)") +
+  ggplot2::theme_minimal()
+```
+
+## Tasks 3 and 4 -- Glycosylation type and structural family {#task-3}
+
+Task 3 predicts the fractional composition of four glycosylation types -- high-mannose, hybrid, complex, and paucimannose -- at a given site. Using fraction regression with a softmax output layer trained under KL-divergence loss, the model achieves an argmax accuracy of 0.844, a mean KL-divergence of 0.091, and an average per-type Pearson correlation of 0.812. The model reliably captures the dominant type at most sites but struggles with mixed-type sites where two categories each account for 30 to 50 percent of the distribution.
+
+Task 4 extends this by classifying glycans into one of eight structural families derived from the GlyConnect taxonomy: high-mannose simple, high-mannose extended, hybrid mono-antennary, hybrid bi-antennary, complex bi-antennary, complex tri-antennary, complex tetra-antennary, and paucimannose. An 8-class MLP operating on the concatenation of the site-level protein embedding and the predicted type distribution from Task 3 achieves a top-1 accuracy of 0.692, top-2 accuracy of 0.858, and macro F1 of 0.641. The strong top-2 accuracy suggests that the model frequently identifies the correct family as its first or second choice, even when the top-1 prediction is wrong.
+
+```r
+# Confusion matrix
+library(readr)
+library(caret)
+
+t4 <- read_csv("results/benchmark/task4_predictions.csv")
+cm <- confusionMatrix(factor(t4$predicted), factor(t4$truth))
+print(cm$table)
+```
+
+## Task 5 -- Structural cluster prediction {#task-5}
+
+Task 5 assigns each glycan to one of 20 structural clusters obtained by KMeans clustering of glycan tree-kernel distances. The number of clusters was selected by maximising the silhouette score over a grid of $K \in \{10, 15, 20, 25, 30, 40, 50\}$, with $K = 20$ yielding the best silhouette of 0.38 and a Calinski-Harabasz index of 2,374.
+
+| $K$ | Silhouette | Calinski-Harabasz |
+|----:|-----------:|------------------:|
+| 10 | 0.31 | 1,842 |
+| 15 | 0.34 | 2,105 |
+| **20** | **0.38** | **2,374** |
+| 25 | 0.36 | 2,291 |
+| 30 | 0.33 | 2,148 |
+
+The prediction model is a 20-class MLP on the same feature set as Task 4, with an additional glycan fingerprint embedding from the GlycanTreeEncoder. It achieves Hits@5 of 0.786, Hits@1 of 0.493, and macro F1 of 0.452. The relatively high Hits@5 indicates that the correct cluster frequently appears among the top five predictions, even though pinpointing the single correct cluster remains challenging.
+
+## Task 6 -- Exact glycan identification {#task-6}
+
+The final and hardest task requires retrieving the correct glycan accession from the full vocabulary of 2,357 N-linked glycans. The GlycoKGNet embedding model (Chapter \@ref(kg-embedding)) scores all `(protein_site, has_glycan, glycan)` triples and returns a ranked list. At the site level, the model achieves an MRR of 0.066, Hits@1 of 0.031, Hits@10 of 0.138, and Hits@50 of 0.304. Protein-level metrics, which aggregate predictions across all sites and report the best rank, are somewhat higher: MRR of 0.118, Hits@1 of 0.062, Hits@10 of 0.221, and Hits@50 of 0.419.
+
+```bash
+# Run the full benchmark evaluation
+python scripts/run_benchmark.py \
+    --tasks 1,2,3,4,5,6 \
+    --model glycokgnet \
+    --checkpoint checkpoints/glycokgnet_best.pt \
+    --output results/benchmark/
+```
+
+These numbers are sobering but informative: even with knowledge graph embeddings, exact glycan identity prediction remains far from solved.
+
+## The determination boundary {#determination-boundary}
+
+Perhaps the most striking finding of the benchmark is the roughly ten-fold performance gap between Task 5 (Hits@5 of 0.786) and Task 6 (site-level MRR of 0.066). We call this the "determination boundary" -- the point at which sequence and knowledge-graph features become insufficient to resolve the exact glycan identity. Tasks 1 through 5 are all tractable, with best metrics ranging from 0.683 to 0.924, while Task 6 remains fundamentally open.
+
+This gap strongly suggests that exact glycan identity is governed by factors not yet captured in the knowledge graph. The most likely candidates are the local cellular environment, Golgi enzyme kinetics, nucleotide-sugar donor availability, and stochastic processing events -- none of which are encoded in protein sequence or current KG structure.
+
+## Baselines and context {#baselines}
+
+Three reference baselines help contextualise the Task 6 results. A uniform random ranking over 2,357 candidates yields an MRR of 0.001. A popularity baseline that ranks glycans by their global frequency in the training set achieves an MRR of 0.100 -- surprisingly strong, because a small number of glycans such as Man5 and Man9 dominate the observed distribution. A BLAST baseline that retrieves glycans of the nearest sequence neighbour yields an MRR of 0.043. GlycoKGNet achieves 0.066, outperforming the BLAST baseline and confirming that the knowledge graph provides information beyond raw sequence similarity, though it falls short of the popularity baseline. This comparison underscores the challenge: the long-tailed glycan frequency distribution means that a simple frequency prior is hard to beat.
+
+## Control experiments and stratified analysis {#o-linked}
+
+As a control, we evaluated the same model on O-linked glycosylation, where the candidate set is much smaller at 112 glycans compared to 2,357 for N-linked. The MRR jumps from 0.066 to 0.847, a dramatic improvement that demonstrates the model architecture is fully capable of high accuracy when the combinatorial space is manageable. The bottleneck in N-linked prediction is not model capacity but the sheer structural diversity of the glycan vocabulary.
+
+Breaking Task 6 results down by glycosylation type reveals substantial variance across categories. Paucimannose glycans are easiest to predict (MRR of 0.194 across 244 glycans), owing to fewer structural variants and strong tissue-specific signals. High-mannose glycans achieve an MRR of 0.142 over 187 glycans. Hybrid glycans fall in the middle at 0.071 across 312 glycans. Complex glycans are by far the hardest, with an MRR of only 0.038 despite constituting the largest category at 1,614 glycans, reflecting the enormous combinatorial diversity of antenna decorations.
+
+```r
+# Visualise type-stratified MRR
+library(ggplot2)
+
+type_mrr <- data.frame(
+  type = c("High-mannose", "Hybrid", "Complex", "Paucimannose"),
+  glycans = c(187, 312, 1614, 244),
+  mrr = c(0.142, 0.071, 0.038, 0.194)
+)
+
+ggplot(type_mrr, aes(x = reorder(type, -mrr), y = mrr, fill = type)) +
+  geom_col(show.legend = FALSE) +
+  geom_text(aes(label = sprintf("n=%d", glycans)), vjust = -0.5, size = 3) +
+  labs(x = NULL, y = "Site-level MRR",
+       title = "Task 6 MRR by glycosylation type") +
+  theme_minimal()
+```
+
+## The two-layer determination model {#two-layer}
+
+We propose a conceptual two-layer model for understanding what determines glycan identity. The first layer consists of sequence determinants: protein sequence, sequon context, signal peptide, and folding accessibility. These features are sufficient to resolve Tasks 1 through 5 and partially inform Task 6. The second layer comprises environmental determinants: cell type, Golgi enzyme repertoire, nucleotide-sugar availability, and stochastic processing. These features are absent from the current knowledge graph and account for the residual gap in Task 6 performance. Future versions of glycoMusubi aim to incorporate cell-type-specific glycotranscriptomic data to bridge this second layer, a direction explored in Chapter \@ref(celltype-analysis).
+
+## Statistical robustness {#robustness}
+
+All reported metrics include 95 percent bootstrap confidence intervals computed from 10,000 resamples of the test set. The intervals are tight across all tasks: Task 1 F1 falls within [0.912, 0.935], Task 2 Recall@3 within [0.659, 0.707], Task 3 accuracy within [0.826, 0.861], Task 4 top-2 accuracy within [0.839, 0.876], Task 5 Hits@5 within [0.764, 0.808], and Task 6 MRR within [0.056, 0.077].
+
+To guard against favourable random splits, we repeated the full experiment across five independent train/test partitions. The standard deviation across splits is below 0.02 for all tasks, confirming that results are not driven by a single favourable partition.
+
+```r
+library(readr)
+library(dplyr)
+
+splits <- read_csv("results/benchmark/5split_summary.csv")
+
+splits %>%
+  group_by(task) %>%
+  summarise(mean_metric = mean(value),
+            sd_metric   = sd(value),
+            .groups     = "drop") %>%
+  knitr::kable(digits = 3,
+               col.names = c("Task", "Mean", "SD"))
+```
+
+## Reproducing the benchmark
+
+The full benchmark, including bootstrap confidence intervals and multi-split robustness checks, can be reproduced with the following commands.
+
+```bash
+# Run all six tasks with bootstrap CIs
+python scripts/run_benchmark.py \
+    --tasks 1,2,3,4,5,6 \
+    --model glycokgnet \
+    --checkpoint checkpoints/glycokgnet_best.pt \
+    --bootstrap 10000 \
+    --output results/benchmark/
+
+# Run the 5-split robustness check
+python scripts/run_benchmark.py \
+    --tasks 1,2,3,4,5,6 \
+    --model glycokgnet \
+    --splits 5 \
+    --output results/benchmark/5split/
+```
+
+## Summary
+
+The hierarchical benchmark reveals a clear determination boundary between coarse-grained tasks (1 through 5), which are largely solvable from sequence and knowledge-graph features alone, and exact glycan identification (Task 6), which remains an open problem. The O-linked control experiment and type-stratified analysis confirm that the bottleneck is combinatorial complexity rather than model capacity. Closing the gap will require new data modalities -- in particular cell-type-specific glyco-enzyme expression profiles -- motivating the next phase of glycoMusubi development.

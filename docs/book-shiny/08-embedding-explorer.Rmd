@@ -1,0 +1,184 @@
+# Embedding Explorer {#embedding-explorer}
+
+## What Embeddings Reveal
+
+The Embedding Explorer lets you visualise the learned representations
+of glycans and proteins as two-dimensional UMAP projections. These
+embeddings capture structural and functional similarity: entities that
+appear close together in the plot share biological characteristics,
+even if they were never explicitly linked in the training data. By
+projecting high-dimensional learned vectors into a plane you can see
+at a glance how the model organises biological knowledge --- which
+glycans it considers similar, which proteins it groups together, and
+where the boundaries between functional categories fall.
+
+The module supports two embedding spaces, and you switch between them
+with a radio button at the top of the sidebar. Glycan embeddings come
+from the knowledge-graph model (TransE or RotatE) with an original
+dimensionality of 256, covering glycan structures drawn from
+GlyTouCan and GlycoStore. Protein embeddings come from ESM-2, a
+protein language model, at 1,280 dimensions, representing
+glycosylation-related proteins such as enzymes and lectins. Both are
+reduced to two dimensions with UMAP using `n_neighbors = 15` and
+`min_dist = 0.1` before display. The UMAP parameters were chosen to
+balance local neighbourhood fidelity against global structure
+preservation, giving you a projection that is faithful at both the
+cluster and landscape levels.
+
+## Controlling the View
+
+The sidebar offers several controls that shape what you see. The
+"Colour-by" dropdown determines how points are painted. Choosing
+"Cluster assignment" applies colours based on k-means cluster labels
+computed during UMAP fitting, which is useful for identifying major
+groupings without any prior biological annotation. Choosing "Glycan
+type" (available only for glycan embeddings) colours points according
+to the top-level glycan classification --- N-glycan, O-glycan, GAG,
+and so on --- letting you see immediately whether the model's learned
+structure aligns with established biochemical categories.
+
+The "Highlight Specific IDs" text input accepts a comma-separated
+list of identifiers. For glycans you might enter `G00051MO, G00065MO`;
+for proteins, `Q10469, P15291`. Highlighted points are rendered with a
+larger marker size and a contrasting black border so they stand out
+clearly from the surrounding cloud. This is invaluable when you have a
+specific glycan or protein in mind and want to locate it within the
+broader embedding landscape.
+
+```r
+highlight_ids <- strsplit(input$highlight_ids, ",\\s*")[[1]]
+umap_df$highlight <- umap_df$id %in% highlight_ids
+
+plot_ly(umap_df, x = ~UMAP1, y = ~UMAP2,
+        type = "scattergl", mode = "markers",
+        marker = list(
+          size = ifelse(umap_df$highlight, 12, 4),
+          line = list(
+            width = ifelse(umap_df$highlight, 2, 0),
+            color = "black"
+          )
+        ))
+```
+
+A point-size slider (ranging from 1 to 10 pixels) lets you adjust the
+base marker size. Smaller values work best when viewing the full
+dataset, as they reduce overplotting and let cluster boundaries emerge
+more clearly. Larger values help when you have zoomed into a sparse
+region and individual points are hard to see. The label toggle
+checkbox overlays text labels (glycan accessions or UniProt IDs) on
+every point. It is off by default because labels create visual clutter
+at full scale, but it becomes invaluable after you zoom into a region
+of interest and want to identify specific entities.
+
+## Reading the Glycan Embedding Space
+
+The glycan UMAP reveals biologically meaningful structure that
+validates the model's learning. High-mannose glycans (Man5 through
+Man9) form a tight, isolated cluster, reflecting their conserved
+biosynthetic origin --- they all share the same core and differ only
+in the number of mannose residues, so the model correctly represents
+them as highly similar. Complex-type glycans spread over a much larger
+area, subdivided by antenna count and terminal modifications such as
+sialylation and fucosylation. This dispersion makes biological sense:
+complex glycans encompass enormous structural diversity, and the model
+captures that by distributing them across a wide region of embedding
+space.
+
+Hybrid-type glycans sit between the high-mannose and complex clusters,
+consistent with their intermediate processing stage in the
+biosynthetic pathway. They share structural features with both
+groups --- the mannose-rich arm of a hybrid glycan resembles
+high-mannose structures, while its processed arm resembles complex
+ones --- and the UMAP faithfully reflects this dual nature.
+
+## Reading the Protein Embedding Space
+
+The protein embedding space tells a complementary story. Proteins with
+similar glycosylation profiles --- those that act on overlapping
+substrate sets --- appear proximal to one another, indicating that
+ESM-2's sequence representations encode functionally relevant
+information beyond mere sequence identity. Sialyltransferases (the
+ST3GAL and ST6GAL families) cluster together, well separated from
+mannosidases, reflecting their distinct enzymatic activities. Because
+ESM-2 captures sequence-level similarity, isoenzymes such as FUT1 and
+FUT2 end up close together even when their substrate specificity
+differs. This is a useful reminder that embedding proximity reflects
+sequence and structural similarity, which correlates with but does not
+perfectly predict functional identity.
+
+Comparing the glycan UMAP clusters with the hierarchy levels in
+Chapter \@ref(hierarchy-browser) reveals how structural containment
+maps onto embedding proximity. Glycans that are close in the hierarchy
+tend to be close in embedding space, but the embedding also captures
+cross-branch similarities that the hierarchy cannot express.
+
+## Demo Mode and Generating Real Data
+
+If UMAP coordinates have not been pre-computed, the module
+automatically enters demo mode. A banner at the top reads "Showing 500
+random demo points. Run the preparation script for real data." In this
+mode, 500 random points sampled from a multivariate normal
+distribution illustrate the interface. All controls --- colour-by,
+highlight, labels --- remain fully functional, so you can familiarise
+yourself with the interface and practice the workflow before loading
+real data.
+
+To replace the demo with actual embeddings, run the preparation script
+from the repository root:
+
+```bash
+cd /home/matsui/github/glycoMusubi
+python3 prepare_shiny_data.py --task umap
+```
+
+This script reads raw embeddings from `outputs/embeddings/`, computes
+UMAP projections, and writes the results to
+`shiny_app/data/umap_glycan.parquet` and
+`shiny_app/data/umap_protein.parquet`. It requires `umap-learn`
+(version 0.5.3 or later), `torch` (2.0 or later), `numpy` (1.24 or
+later), and `pandas` (2.0 or later). Typical runtime is two to five
+minutes on a machine with 32 GB of RAM for roughly 58,000 glycan
+points and 12,000 protein points. You can verify that the output files
+were created successfully with:
+
+```bash
+ls -lh shiny_app/data/umap_*.parquet
+```
+
+## Performance Considerations
+
+The plot uses plotly's WebGL renderer (`type = "scattergl"`) rather
+than the default SVG renderer, and this choice matters enormously at
+scale. With 10,000 points both renderers feel smooth, but at 50,000
+points the SVG renderer becomes sluggish while WebGL stays responsive.
+At 100,000 points SVG is effectively unusable --- the browser
+struggles to manage that many DOM elements --- whereas WebGL remains
+usable with only minor lag because it offloads rendering to the GPU.
+
+If you experience slow rendering on an older machine or one without a
+dedicated GPU, the simplest remedy is to filter the display to a
+single glycan type or cluster. This reduces the point count
+dramatically and restores the snappy interaction you need for
+productive exploration.
+
+## Exploring Glycan Clusters Step by Step
+
+Open the Embedding Explorer tab and select "Glycan" as the embedding
+type. Set the colour-by control to "Glycan type" to see the major
+categories painted across the plot. Zoom into the high-mannose cluster
+(usually found in the top-left region, though UMAP layouts are
+stochastic so the exact position may vary) and enable labels to read
+individual GlyTouCan accessions. If a particular glycan catches your
+eye, paste its ID into the highlight box and press Enter to make it
+visually prominent. Then switch to "Protein" embeddings and colour by
+cluster to see how enzymes group by function.
+
+For more advanced exploration, use plotly's lasso tool to draw a
+freehand region around a group of points and inspect the selected
+entities in the table below the plot. Double-clicking the plot area
+resets to the original view. You can note the cluster ID of an
+interesting glycan group and then cross-reference its prediction
+accuracy in the Benchmark Dashboard (Chapter \@ref(benchmarks)). The
+plotly camera icon in the toolbar exports a publication-quality PNG at
+the current zoom level, suitable for inclusion in papers or
+presentations.

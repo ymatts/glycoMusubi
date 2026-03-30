@@ -1,0 +1,63 @@
+# Round 4: BioHGT Message Passing (Inductive)
+# 1-layer BioHGT for neighbor information propagation
+# glycan_encoder: tree_mpnn (fully feature-based, proven in R2)
+# protein_encoder: esm2_site_aware (glycosylation site context, proven in R2)
+# BioHGT enables inductive inference through message passing
+# Mixed precision (bf16) + edge subsampling to fit GPU memory
+# Target: Inductive MRR improvement on protein::has_glycan
+name: glycokgnet_inductive_r4
+seed: 42
+embedding_dim: 256
+
+model:
+  name: GlycoKGNet
+  embedding_dim: 256
+  glycan_encoder_type: tree_mpnn
+  protein_encoder_type: esm2_site_aware
+  esm2_cache_path: data_clean/esm2_cache
+  site_map_path: data_clean/site_positions_map.pt
+  num_hgt_layers: 1
+  num_hgt_heads: 8
+  hgt_max_edges_per_type: 50000
+  use_bio_prior: true
+  use_cross_modal_fusion: true
+  num_fusion_heads: 4
+  decoder_type: hybrid
+  dropout: 0.1
+  loss_fn: bce
+  adversarial_temperature: 0.5
+  label_smoothing: 0.05
+  inductive: true
+
+data:
+  holdout_ratio: 0.15
+  inductive_min_degree: 2
+
+training:
+  epochs: 400
+  batch_size: 512
+  lr: 5.0e-4
+  weight_decay: 1.0e-5
+  optimizer: adam
+  scheduler: cosine
+  grad_clip: 1.0
+  early_stopping_patience: 40
+  eval_every: 10
+  relation_balance_alpha: 0.5
+  relation_balance_max_weight: 5.0
+  gradient_accumulation_steps: 4
+  max_edges_per_type: 0
+  num_negatives: 32
+  mixed_precision: true
+  amp_dtype: bfloat16
+  # Full-batch with per-edge-type backprop (torch-sparse unavailable for HGT loader)
+  use_hgt_loader: false
+  hgt_batch_size: 512
+  hgt_num_samples: [512, 256]
+
+tags:
+  - glycokgnet
+  - inductive
+  - round4
+  - biohgt
+  - message_passing

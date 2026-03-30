@@ -1,0 +1,219 @@
+# デプロイガイド {#deployment}
+
+この章では、glycoMusubi Shinyアプリをローカル環境、Docker、shinyapps.io、大学サーバーの4つの方法でデプロイする手順を解説します。
+
+## ローカル開発環境
+
+ローカルで動かすのが最も手軽な出発点です。まず必要なRパッケージをインストールします。
+
+```r
+install.packages(c("shiny", "bslib", "DT", "plotly", "visNetwork",
+                    "arrow", "data.table", "shinycssloaders", "shinyWidgets"))
+```
+
+次に、`global.R`がデータディレクトリを見つけられるよう、環境変数を設定します。
+
+```bash
+export GLYCOKG_KG_DIR=/path/to/kg_data
+export GLYCOKG_DATA_DIR=/path/to/processed_data
+export GLYCOKG_EXP_DIR=/path/to/experiments
+```
+
+これらの環境変数を設定しない場合、`global.R`はフォールバック値を使用します。
+
+```r
+kg_dir   <- Sys.getenv("GLYCOKG_KG_DIR",  unset = "../data/kg")
+data_dir <- Sys.getenv("GLYCOKG_DATA_DIR", unset = "../data/processed")
+exp_dir  <- Sys.getenv("GLYCOKG_EXP_DIR",  unset = "../data/experiments")
+```
+
+開発中はフォールバックのまま動かせることが多いですが、本番環境では明示的に指定することを推奨します。アプリの起動は1行で完了します。
+
+```r
+shiny::runApp("shiny_app/", port = 3838)
+```
+
+ブラウザで `http://localhost:3838` を開けば、ダッシュボードが表示されます。Rのバージョンは4.3以上を推奨します。arrowパッケージはParquetファイルの読み書きにC++ライブラリを使用するため、システムによってはlibcurl、OpenSSL、libxml2などの開発ヘッダが事前に必要です。
+
+## Dockerデプロイ
+
+Dockerを使えば、R環境のセットアップに関するあらゆる依存関係の問題を回避できます。再現性のある環境を一度ビルドすれば、どのマシンでも同じように動作します。
+
+### Dockerfile
+
+```dockerfile
+FROM rocker/shiny-verse:4.4.1
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libcurl4-openssl-dev libssl-dev libxml2-dev libglpk-dev cmake \
+    && rm -rf /var/lib/apt/lists/*
+RUN install2.r --error --skipinstalled \
+    bslib DT plotly visNetwork arrow data.table shinycssloaders shinyWidgets
+COPY shiny_app/ /srv/shiny-server/glycokg/
+EXPOSE 3838
+CMD ["/usr/bin/shiny-server"]
+```
+
+ベースイメージ `rocker/shiny-verse:4.4.1` にはShiny ServerとtidyverseがプリインストールされているためRStudioの公式イメージとして信頼性が高く、セキュリティパッチも定期的に提供されます。`install2.r`はlittlerパッケージの便利なラッパーで、CRANパッケージのインストールを1行で記述できます。
+
+### docker-compose.yml
+
+```yaml
+version: "3.9"
+services:
+  glycokg-app:
+    build: .
+    ports:
+      - "3838:3838"
+    volumes:
+      - ./data/kg:/srv/data/kg:ro
+      - ./data/processed:/srv/data/processed:ro
+      - ./data/experiments:/srv/data/experiments:ro
+    environment:
+      - GLYCOKG_KG_DIR=/srv/data/kg
+      - GLYCOKG_DATA_DIR=/srv/data/processed
+      - GLYCOKG_EXP_DIR=/srv/data/experiments
+    restart: unless-stopped
+    mem_limit: 4g
+```
+
+ボリュームマウントは読み取り専用（`:ro`）にしています。アプリがデータを書き換えることはないため、安全性の観点から読み取り専用が適切です。`mem_limit: 4g`は、大量の埋め込みデータをロードする際にホストメモリを食い尽くさないための安全策です。実際のメモリ使用量はデータ規模に依存しますが、Parquetの遅延読み込みを活用すれば4GBで十分なことがほとんどです。
+
+### 環境変数の一覧
+
+| 変数名 | 用途 | デフォルト |
+|--------|------|-----------|
+| `GLYCOKG_KG_DIR` | KGのParquet/エッジファイル | `../data/kg` |
+| `GLYCOKG_DATA_DIR` | 処理済みアノテーションテーブル | `../data/processed` |
+| `GLYCOKG_EXP_DIR` | 実験結果と埋め込み | `../data/experiments` |
+
+### ビルドと実行
+
+```bash
+docker compose build                # イメージをビルド
+docker compose build --no-cache     # キャッシュなしで再ビルド
+docker compose up -d                # バックグラウンドで起動
+docker compose down                 # アプリを停止
+docker compose logs -f              # ログをリアルタイム表示
+```
+
+初回ビルドはRパッケージのコンパイルに10〜15分かかることがありますが、2回目以降はDockerのレイヤーキャッシュにより数秒で完了します。パッケージの更新やDockerfileの変更がない限り、`docker compose up -d`で即座に起動します。
+
+## shinyapps.ioデプロイ
+
+shinyapps.ioの無料プランには1GBのストレージ制限があります。埋め込みデータを含むフルデータセットは約12GBあるため、縮小版バンドルが必要です。Parquetファイルのみ（約250MB）であれば制限内に収まります。
+
+```r
+rsconnect::deployApp(appDir = "shiny_app/", appName = "glycoMusubi")
+```
+
+データサイズ削減の戦略として、Parquetファイルのみを同梱し、実験データをサブセットにし、`.rsconnectignore`で大きなファイルを除外します。
+
+```text
+data/experiments/embeddings/
+data/raw/
+*.rds
+```
+
+shinyapps.ioではサーバーサイドのカスタマイズ（Nginx設定、認証バックエンドなど）ができないため、シンプルなデモやプロトタイプ公開に最適です。本格的な運用には次節の大学サーバーデプロイを検討してください。
+
+## 大学サーバーデプロイ
+
+研究グループや学科全体で共有する本番環境には、ShinyProxyとNginxリバースプロキシの組み合わせが推奨されます。
+
+### ShinyProxy
+
+ShinyProxyはユーザーセッションごとに新しいDockerコンテナを起動するため、セッション間の分離が保証されます。LDAP認証と組み合わせれば、大学のディレクトリサービスと直接統合できます。
+
+```yaml
+# application.yml 抜粋
+proxy:
+  title: glycoMusubi
+  port: 8080
+  authentication: ldap
+  ldap:
+    url: ldap://ldap.example.edu:389/dc=example,dc=edu
+    user-search-filter: (uid={0})
+  specs:
+    - id: glycokg
+      container-image: glycokg-app:latest
+      container-volumes:
+        - /data/glycokg/kg:/srv/data/kg:ro
+        - /data/glycokg/processed:/srv/data/processed:ro
+```
+
+ShinyProxyの利点は、各ユーザーが独立したRプロセスを持つため、一人の重い操作が他のユーザーに影響しないことです。ただし、ユーザー数が多い場合はホストマシンのメモリとCPUに注意が必要です。1ユーザーあたり約1〜2GBのメモリを見込んでおくとよいでしょう。
+
+### Nginxリバースプロキシ + SSL
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name glycokg.example.edu;
+    ssl_certificate     /etc/letsencrypt/live/glycokg.example.edu/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/glycokg.example.edu/privkey.pem;
+    location / {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_read_timeout 600s;
+    }
+}
+```
+
+`proxy_http_version 1.1` と `Upgrade`/`Connection` ヘッダの設定はWebSocket通信に必須です。ShinyアプリはWebSocketを使ってサーバーとブラウザ間でリアルタイム通信を行うため、この設定がないと接続が確立しません。`proxy_read_timeout 600s` は、長時間かかる計算（大規模BFS走査やUMAP再計算など）でタイムアウトしないための設定です。
+
+SSL証明書はLet's Encryptで簡単に取得できます。
+
+```bash
+sudo certbot --nginx -d glycokg.example.edu
+```
+
+### 認証オプション
+
+ShinyProxy経由のLDAP認証に加え、shinymanagerパッケージでアプリ自体にログインページを追加する方法もあります。
+
+```r
+ui <- shinymanager::secure_app(ui, enable_admin = TRUE)
+```
+
+shinymanagerは小規模なチームや外部コラボレーター向けに便利ですが、大規模な組織ではLDAP統合の方が管理コストが低くなります。
+
+## パフォーマンスチューニング
+
+### メモリ管理
+
+arrowの遅延読み込みを活用すれば、ファイル全体をメモリに読み込まずに必要な部分だけを処理できます。大規模なインメモリ結合には`data.table`を使います。
+
+```r
+nodes <- arrow::open_dataset(file.path(kg_dir, "nodes.parquet"))
+edges <- arrow::open_dataset(file.path(kg_dir, "edges.parquet"))
+```
+
+`open_dataset`は即座にデータをメモリにロードするのではなく、クエリが実行されたときに初めて必要な列とフィルタ条件に合致する行だけを読み込みます。58,000ノードと100万エッジの全量を一度にロードする場合と比較して、メモリ使用量を大幅に削減できます。
+
+### 同時実行性
+
+単一のRプロセスは一度に一人のユーザーしか処理できません。複数ユーザーに対応するには、ShinyProxy（ユーザーごとにコンテナ）、Shiny Server Proのワーカー機能、あるいは `docker compose up --scale glycokg-app=3` でロードバランサー背後に複数インスタンスを配置します。
+
+### キャッシュ
+
+コストの高いreactiveには`bindCache()`を適用します。
+
+```r
+filtered_data <- reactive({
+  nodes |> dplyr::filter(type == input$node_type) |> dplyr::collect()
+}) |> bindCache(input$node_type)
+```
+
+`bindCache`は入力値が同じ場合に再計算をスキップするため、同じnode typeを繰り返し選択するユーザーが多い場合に劇的な応答時間の改善をもたらします。
+
+### モニタリング
+
+```bash
+docker stats glycokg-app
+docker compose logs -f --tail=100
+docker exec -it glycokg-app tail -f /var/log/shiny-server/*.log
+```
+
+ログで `Connection closed` 警告が頻発する場合は、メモリ不足が疑われます。レンダリング時間の遅延がログに記録されている場合は、キャッシュ設定の見直しやインスタンス数の増加を検討してください。
