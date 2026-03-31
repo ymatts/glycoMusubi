@@ -87,7 +87,7 @@ Seven interactive modules:
 @article{matsui2026glycomusubi,
   title={Hierarchical glycan prediction from protein sequence reveals a determination boundary at the structural-class level},
   author={Matsui, Yusuke},
-  journal={Bioinformatics},
+  journal={TBD,
   year={2026}
 }
 ```
